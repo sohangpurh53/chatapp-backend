@@ -57,6 +57,9 @@
     <script>
         let socket = null;
         let token = null;
+        const url = window.location.href
+
+        console.log(url)
 
         function log(message) {
             const logDiv = document.getElementById('log');
@@ -95,7 +98,7 @@
                 log('Connecting without authentication');
             }
 
-            socket = io('http://localhost:3000', options);
+            socket = io(url, options);
 
             socket.on('connect', () => {
                 log('✅ Connected successfully!');
