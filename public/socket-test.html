@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .connected { background-color: #d4edda; color: #155724; }
+        .disconnected { background-color: #f8d7da; color: #721c24; }
+        .log { background-color: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 5px; max-height: 300px; overflow-y: auto; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        input { padding: 8px; margin: 5px; width: 200px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Socket.IO Connection Test</h1>
+        
+        <div id="status" class="status disconnected">
+            Status: Disconnected
+        </div>
+
+        <div>
+            <h3>Connection Controls</h3>
+            <button onclick="connectSocket()">Connect</button>
+            <button onclick="disconnectSocket()">Disconnect</button>
+            <button onclick="clearLog()">Clear Log</button>
+        </div>
+
+        <div>
+            <h3>Authentication (Optional)</h3>
+            <input type="email" id="email" placeholder="Email" value="test@example.com">
+            <input type="password" id="password" placeholder="Password" value="password123">
+            <button onclick="authenticate()">Login & Connect</button>
+        </div>
+
+        <div>
+            <h3>Test Events</h3>
+            <input type="text" id="chatId" placeholder="Chat ID" value="test-chat-123">
+            <button onclick="joinChat()">Join Chat</button>
+            <button onclick="leaveChat()">Leave Chat</button>
+            <br>
+            <input type="text" id="message" placeholder="Test message" value="Hello World!">
+            <button onclick="sendMessage()">Send Message</button>
+        </div>
+
+        <div>
+            <h3>Event Log</h3>
+            <div id="log" class="log"></div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        let socket = null;
+        let token = null;
+
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(connected) {
+            const statusDiv = document.getElementById('status');
+            if (connected) {
+                statusDiv.className = 'status connected';
+                statusDiv.textContent = `Status: Connected (ID: ${socket.id})`;
+            } else {
+                statusDiv.className = 'status disconnected';
+                statusDiv.textContent = 'Status: Disconnected';
+            }
+        }
+
+        function connectSocket() {
+            if (socket && socket.connected) {
+                log('Already connected!');
+                return;
+            }
+
+            log('Attempting to connect...');
+            
+            const options = {
+                transports: ['websocket', 'polling']
+            };
+
+            if (token) {
+                options.auth = { token: token };
+                log('Connecting with authentication token');
+            } else {
+                log('Connecting without authentication');
+            }
+
+            socket = io('http://localhost:3000', options);
+
+            socket.on('connect', () => {
+                log('✅ Connected successfully!');
+                updateStatus(true);
+            });
+
+            socket.on('disconnect', (reason) => {
+                log(`❌ Disconnected: ${reason}`);
+                updateStatus(false);
+            });
+
+            socket.on('connect_error', (error) => {
+                log(`❌ Connection error: ${error.message}`);
+                updateStatus(false);
+            });
+
+            // Listen for chat events
+            socket.on('user_joined', (data) => {
+                log(`📥 User joined: ${JSON.stringify(data)}`);
+            });
+
+            socket.on('user_left', (data) => {
+                log(`📥 User left: ${JSON.stringify(data)}`);
+            });
+
+            socket.on('new_message', (data) => {
+                log(`📥 New message: ${JSON.stringify(data)}`);
+            });
+
+            socket.on('error', (error) => {
+                log(`❌ Socket error: ${JSON.stringify(error)}`);
+            });
+        }
+
+        function disconnectSocket() {
+            if (socket) {
+                socket.disconnect();
+                log('Disconnected manually');
+                updateStatus(false);
+            }
+        }
+
+        async function authenticate() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                log('Attempting to authenticate...');
+                
+                // Try login first
+                let response;
+                try {
+                    response = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, password })
+                    });
+                } catch (error) {
+                    log('Login failed, trying registration...');
+                    response = await fetch('/api/auth/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            username: 'testuser', 
+                            email, 
+                            password 
+                        })
+                    });
+                }
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    token = data.token;
+                    log('✅ Authentication successful!');
+                    log(`User: ${data.user.username} (${data.user.email})`);
+                    
+                    // Disconnect current socket and reconnect with auth
+                    if (socket) {
+                        socket.disconnect();
+                    }
+                    connectSocket();
+                } else {
+                    log(`❌ Authentication failed: ${data.error}`);
+                }
+            } catch (error) {
+                log(`❌ Authentication error: ${error.message}`);
+            }
+        }
+
+        function joinChat() {
+            if (!socket || !socket.connected) {
+                log('❌ Not connected to socket');
+                return;
+            }
+
+            const chatId = document.getElementById('chatId').value;
+            socket.emit('join_chat', { chatId });
+            log(`📤 Sent join_chat: ${chatId}`);
+        }
+
+        function leaveChat() {
+            if (!socket || !socket.connected) {
+                log('❌ Not connected to socket');
+                return;
+            }
+
+            const chatId = document.getElementById('chatId').value;
+            socket.emit('leave_chat', { chatId });
+            log(`📤 Sent leave_chat: ${chatId}`);
+        }
+
+        function sendMessage() {
+            if (!socket || !socket.connected) {
+                log('❌ Not connected to socket');
+                return;
+            }
+
+            const chatId = document.getElementById('chatId').value;
+            const message = document.getElementById('message').value;
+            
+            socket.emit('send_message', {
+                chatId: chatId,
+                content: message,
+                messageType: 'text'
+            });
+            log(`📤 Sent message: "${message}" to chat: ${chatId}`);
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        // Auto-connect on page load
+        window.onload = () => {
+            log('Page loaded. Click "Connect" to test socket connection.');
+        };
+    </script>
+</body>
+</html>
