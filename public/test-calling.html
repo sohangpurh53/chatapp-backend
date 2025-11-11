@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -24,7 +25,7 @@
             margin: 0 auto;
             background: white;
             border-radius: 15px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
             overflow: hidden;
         }
 
@@ -72,7 +73,9 @@
             color: #495057;
         }
 
-        input, select, button {
+        input,
+        select,
+        button {
             width: 100%;
             padding: 10px;
             border: 1px solid #ced4da;
@@ -221,7 +224,7 @@
             background: white;
             padding: 30px;
             border-radius: 15px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
             z-index: 1000;
             text-align: center;
             min-width: 300px;
@@ -282,6 +285,7 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <div class="header">
@@ -293,7 +297,7 @@
             <!-- Authentication & Connection Panel -->
             <div class="panel">
                 <h3>🔐 Authentication & Connection</h3>
-                
+
                 <div class="auth-section">
                     <div class="form-group">
                         <label>Email:</label>
@@ -309,6 +313,7 @@
                     </div>
                     <button onclick="login()">Login</button>
                     <button onclick="register()">Register</button>
+                    <button onclick="createTestUsers()" style="background: #17a2b8;">Create Test Users</button>
                 </div>
 
                 <div id="connectionStatus" class="status disconnected">
@@ -322,10 +327,15 @@
             <!-- User Search & Chat Panel -->
             <div class="panel">
                 <h3>👥 Users & Chat</h3>
-                
+
                 <div class="form-group">
                     <label>Search Users:</label>
-                    <input type="text" id="searchInput" placeholder="Search by username or email" oninput="searchUsers()">
+                    <input type="text" id="searchInput" placeholder="Search by username or email (min 2 chars)"
+                        oninput="debounceSearch()">
+                    <div style="display: flex; gap: 5px; margin-top: 5px;">
+                        <button onclick="searchUsers()" style="flex: 1;">🔍 Search</button>
+                        <button onclick="loadAllUsers()" style="flex: 1; background: #28a745;">👥 Load All</button>
+                    </div>
                 </div>
 
                 <div id="userList" class="user-list">
@@ -342,7 +352,8 @@
                 </div>
 
                 <div class="form-group">
-                    <input type="text" id="messageInput" placeholder="Type a message..." onkeypress="handleMessageKeyPress(event)">
+                    <input type="text" id="messageInput" placeholder="Type a message..."
+                        onkeypress="handleMessageKeyPress(event)">
                     <button onclick="sendMessage()">Send Message</button>
                 </div>
             </div>
@@ -350,7 +361,7 @@
             <!-- Calling Panel -->
             <div class="panel">
                 <h3>📞 Calling Features</h3>
-                
+
                 <div class="form-group">
                     <button class="call-button" onclick="initiateVoiceCall()" id="voiceCallBtn" disabled>
                         📞 Start Voice Call
@@ -372,7 +383,8 @@
 
                 <div class="form-group">
                     <h4>Call History</h4>
-                    <div id="callHistory" style="max-height: 150px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 5px; padding: 10px;">
+                    <div id="callHistory"
+                        style="max-height: 150px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 5px; padding: 10px;">
                         <!-- Call history will appear here -->
                     </div>
                 </div>
@@ -406,12 +418,13 @@
         let currentChatId = null;
         let currentCall = null;
         let users = [];
+        let searchTimeout = null;
+
         function getBaseURL(fullUrl) {
-        const urlObj = new URL(fullUrl);
-        return `${urlObj.protocol}//${urlObj.host}`;
+            const urlObj = new URL(fullUrl);
+            return `${urlObj.protocol}//${urlObj.host}`;
         }
         const url = window.location.href
-
         const baseUrl = getBaseURL(url);
         console.log(baseUrl)
 
@@ -429,6 +442,66 @@
             statusEl.textContent = message;
         }
 
+        // Debounce search function
+        function debounceSearch() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                const query = document.getElementById('searchInput').value.trim();
+                if (query.length >= 2 || query.length === 0) {
+                    searchUsers();
+                }
+            }, 500);
+        }
+
+        // Create test users for easier testing
+        async function createTestUsers() {
+            const testUsers = [
+                { username: 'alice', email: 'alice@test.com', password: 'password123' },
+                { username: 'bob', email: 'bob@test.com', password: 'password123' },
+                { username: 'charlie', email: 'charlie@test.com', password: 'password123' },
+                { username: 'diana', email: 'diana@test.com', password: 'password123' },
+                { username: 'jamie', email: 'jamie@test.com', password: 'password123' }
+            ];
+
+            log('🔧 Creating test users...');
+            let created = 0;
+
+            for (const user of testUsers) {
+                try {
+                    const response = await fetch(baseUrl + '/api/auth/register', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(user)
+                    });
+
+                    if (response.ok) {
+                        created++;
+                        log(`✅ Created user: ${user.username}`);
+                    } else {
+                        const data = await response.json();
+                        if (data.message && data.message.includes('already exists')) {
+                            log(`ℹ️ User ${user.username} already exists`);
+                        } else {
+                            log(`⚠️ Failed to create ${user.username}: ${data.message}`);
+                        }
+                    }
+                } catch (error) {
+                    log(`❌ Error creating ${user.username}: ${error.message}`);
+                }
+            }
+
+            log(`🎉 Test user creation complete! ${created} new users created.`);
+            log('💡 You can now search for: alice, bob, charlie, diana, jamie');
+
+            // Auto-search for test users
+            setTimeout(() => {
+                document.getElementById('searchInput').value = 'test';
+                searchUsers();
+            }, 1000);
+        }
+
         // Authentication functions
         async function register() {
             const email = document.getElementById('email').value;
@@ -436,7 +509,7 @@
             const username = document.getElementById('username').value;
 
             try {
-                const response = await fetch(baseUrl+'/api/auth/register', {
+                const response = await fetch(baseUrl + '/api/auth/register', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -445,7 +518,7 @@
                 });
 
                 const data = await response.json();
-                
+
                 if (response.ok) {
                     authToken = data.token;
                     currentUser = data.user;
@@ -464,7 +537,7 @@
             const password = document.getElementById('password').value;
 
             try {
-                const response = await fetch(baseUrl+'/api/auth/login', {
+                const response = await fetch(baseUrl + '/api/auth/login', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -473,7 +546,7 @@
                 });
 
                 const data = await response.json();
-                
+
                 if (response.ok) {
                     authToken = data.token;
                     currentUser = data.user;
@@ -502,7 +575,7 @@
             });
 
             setupSocketListeners();
-            
+
             document.getElementById('connectBtn').disabled = true;
             document.getElementById('disconnectBtn').disabled = false;
         }
@@ -512,7 +585,7 @@
                 socket.disconnect();
                 socket = null;
             }
-            
+
             updateConnectionStatus('disconnected', 'Disconnected');
             document.getElementById('connectBtn').disabled = false;
             document.getElementById('disconnectBtn').disabled = true;
@@ -524,7 +597,7 @@
             socket.on('connect', () => {
                 log(`✅ Connected to socket server. Socket ID: ${socket.id}`);
                 updateConnectionStatus('connected', `Connected as ${currentUser.username}`);
-                searchUsers(); // Load users on connect
+                log('💡 Use "Create Test Users" button or search for users to start testing');
             });
 
             socket.on('connect_error', (error) => {
@@ -592,28 +665,100 @@
 
         // User search functions
         async function searchUsers() {
-            const query = document.getElementById('searchInput').value;
-            
-            if (!authToken) return;
+            const query = document.getElementById('searchInput').value.trim();
+
+            if (!authToken) {
+                log('❌ Please login first');
+                return;
+            }
+
+            // Only search if query has at least 2 characters
+            if (query.length > 0 && query.length < 2) {
+                log('⚠️ Search query must be at least 2 characters');
+                return;
+            }
+
+            if (query.length === 0) {
+                log('⚠️ Please enter a search query or use "Load All" button');
+                return;
+            }
 
             try {
-                const response = await fetch(baseUrl+`/api/chat/search/users?q=${encodeURIComponent(query)}`, {
+                log(`🔍 Searching for users: "${query}"`);
+
+                const response = await fetch(baseUrl + `/api/chat/search/users?q=${encodeURIComponent(query)}`, {
                     headers: {
                         'Authorization': `Bearer ${authToken}`
                     }
                 });
 
                 const data = await response.json();
-                
+
                 if (response.ok) {
                     users = data.users || [];
                     displayUsers(users);
-                    log(`🔍 Found ${users.length} users`);
+                    log(`✅ Found ${users.length} users for "${query}"`);
                 } else {
                     log(`❌ Search failed: ${data.message}`);
+                    users = [];
+                    displayUsers(users);
                 }
             } catch (error) {
                 log(`❌ Search error: ${error.message}`);
+                users = [];
+                displayUsers(users);
+            }
+        }
+
+        // Load all users (using a broad search)
+        async function loadAllUsers() {
+            if (!authToken) {
+                log('❌ Please login first');
+                return;
+            }
+
+            try {
+                log('👥 Loading all users...');
+
+                // Search for common patterns to get more users
+                const searchQueries = ['te', 'us', 'ad', 'ja', 'bo', 'al', 'ch', 'di'];
+                let allUsers = [];
+
+                for (const query of searchQueries) {
+                    try {
+                        const response = await fetch(baseUrl + `/api/chat/search/users?q=${encodeURIComponent(query)}`, {
+                            headers: {
+                                'Authorization': `Bearer ${authToken}`
+                            }
+                        });
+
+                        const data = await response.json();
+
+                        if (response.ok && data.users) {
+                            // Add users that aren't already in the list
+                            data.users.forEach(user => {
+                                if (!allUsers.find(u => u.id === user.id)) {
+                                    allUsers.push(user);
+                                }
+                            });
+                        }
+                    } catch (error) {
+                        // Continue with other queries if one fails
+                        console.log(`Search for "${query}" failed:`, error);
+                    }
+                }
+
+                users = allUsers;
+                displayUsers(users);
+                log(`✅ Loaded ${users.length} total users`);
+
+                if (users.length === 0) {
+                    log('💡 No users found. Try creating test users first!');
+                }
+            } catch (error) {
+                log(`❌ Error loading users: ${error.message}`);
+                users = [];
+                displayUsers(users);
             }
         }
 
@@ -621,39 +766,58 @@
             const userListEl = document.getElementById('userList');
             userListEl.innerHTML = '';
 
+            if (userList.length === 0) {
+                userListEl.innerHTML = `
+                    <div style="padding: 20px; text-align: center; color: #6c757d;">
+                        <p>No users found</p>
+                        <small>Try creating test users or searching with different terms</small>
+                    </div>
+                `;
+                return;
+            }
+
             userList.forEach(user => {
-                if (user.id === currentUser.id) return; // Skip current user
+                if (user.id === currentUser?.id) return; // Skip current user
 
                 const userEl = document.createElement('div');
                 userEl.className = 'user-item';
                 userEl.innerHTML = `
-                    <strong>${user.username}</strong><br>
-                    <small>${user.email}</small>
-                    <span style="float: right; color: ${user.isOnline ? 'green' : 'gray'};">
-                        ${user.isOnline ? '🟢' : '⚫'}
-                    </span>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong>${user.username}</strong><br>
+                            <small style="color: #6c757d;">${user.email}</small>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="color: ${user.isOnline ? 'green' : 'gray'}; font-size: 12px;">
+                                ${user.isOnline ? '🟢 Online' : '⚫ Offline'}
+                            </span><br>
+                            <small style="color: #007bff; cursor: pointer;">Click to select</small>
+                        </div>
+                    </div>
                 `;
                 userEl.onclick = () => selectUser(user);
                 userListEl.appendChild(userEl);
             });
+
+            log(`📋 Displaying ${userList.length} users (excluding yourself)`);
         }
 
         function selectUser(user) {
             selectedUserId = user.id;
             document.getElementById('selectedUser').value = `${user.username} (${user.email})`;
-            
+
             // Remove previous selection
             document.querySelectorAll('.user-item').forEach(el => el.classList.remove('selected'));
-            
+
             // Add selection to clicked item
             event.target.closest('.user-item').classList.add('selected');
-            
+
             // Enable call buttons
             document.getElementById('voiceCallBtn').disabled = false;
             document.getElementById('videoCallBtn').disabled = false;
-            
+
             log(`👤 Selected user: ${user.username}`);
-            
+
             // Create or get chat with this user
             createDirectChat(user.id);
         }
@@ -673,7 +837,7 @@
         // Chat functions
         async function createDirectChat(participantId) {
             try {
-                const response = await fetch(baseUrl+'/api/chat/create', {
+                const response = await fetch(baseUrl + '/api/chat/create', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -686,16 +850,16 @@
                 });
 
                 const data = await response.json();
-                
+
                 if (response.ok) {
                     currentChatId = data.chat.id;
                     log(`💬 Chat created/found: ${data.chat.id}`);
-                    
+
                     // Join the chat room
                     if (socket) {
                         socket.emit('join_chat', { chatId: currentChatId });
                     }
-                    
+
                     // Load existing messages
                     loadChatMessages(currentChatId);
                 } else {
@@ -708,22 +872,22 @@
 
         async function loadChatMessages(chatId) {
             try {
-                const response = await fetch(baseUrl+`/api/chat/${chatId}/messages`, {
+                const response = await fetch(baseUrl + `/api/chat/${chatId}/messages`, {
                     headers: {
                         'Authorization': `Bearer ${authToken}`
                     }
                 });
 
                 const data = await response.json();
-                
+
                 if (response.ok) {
                     const messagesEl = document.getElementById('chatMessages');
                     messagesEl.innerHTML = '';
-                    
+
                     data.messages.forEach(message => {
                         displayMessage(message);
                     });
-                    
+
                     log(`📨 Loaded ${data.messages.length} messages`);
                 } else {
                     log(`❌ Failed to load messages: ${data.message}`);
@@ -737,13 +901,13 @@
             const messagesEl = document.getElementById('chatMessages');
             const messageEl = document.createElement('div');
             messageEl.className = `message ${message.senderId === currentUser.id ? 'own' : 'other'}`;
-            
+
             const timestamp = new Date(message.createdAt).toLocaleTimeString();
             messageEl.innerHTML = `
                 <strong>${message.sender.username}</strong> <small>${timestamp}</small><br>
                 ${message.content}
             `;
-            
+
             messagesEl.appendChild(messageEl);
             messagesEl.scrollTop = messagesEl.scrollHeight;
         }
@@ -751,7 +915,7 @@
         function sendMessage() {
             const messageInput = document.getElementById('messageInput');
             const content = messageInput.value.trim();
-            
+
             if (!content || !currentChatId || !socket) return;
 
             socket.emit('send_message', {
@@ -785,13 +949,13 @@
 
             socket.emit('initiate_call', callData);
             log(`📞 Initiating voice call to user ${selectedUserId}`);
-            
+
             currentCall = {
                 ...callData,
                 callId: Date.now().toString(), // Temporary ID
                 status: 'calling'
             };
-            
+
             updateCallStatus('calling', 'Calling...');
         }
 
@@ -809,13 +973,13 @@
 
             socket.emit('initiate_call', callData);
             log(`📹 Initiating video call to user ${selectedUserId}`);
-            
+
             currentCall = {
                 ...callData,
                 callId: Date.now().toString(), // Temporary ID
                 status: 'calling'
             };
-            
+
             updateCallStatus('calling', 'Video calling...');
         }
 
@@ -824,7 +988,7 @@
 
             socket.emit('answer_call', { callId: currentCall.callId });
             log(`✅ Answering call ${currentCall.callId}`);
-            
+
             hideIncomingCall();
             updateCallStatus('connected', 'Call connected');
             showCallControls(true);
@@ -835,7 +999,7 @@
 
             socket.emit('decline_call', { callId: currentCall.callId });
             log(`❌ Declining call ${currentCall.callId}`);
-            
+
             hideIncomingCall();
             currentCall = null;
         }
@@ -845,7 +1009,7 @@
 
             socket.emit('end_call', { callId: currentCall.callId });
             log(`📞 Ending call ${currentCall.callId}`);
-            
+
             updateCallStatus('', 'Call ended');
             showCallControls(false);
             hideIncomingCall();
@@ -857,7 +1021,7 @@
 
             socket.emit('toggle_audio', { callId: currentCall.callId });
             log(`🔇 Toggled audio for call ${currentCall.callId}`);
-            
+
             const btn = document.getElementById('audioBtn');
             btn.textContent = btn.textContent.includes('Mute') ? '🔊 Unmute' : '🔇 Mute';
         }
@@ -867,7 +1031,7 @@
 
             socket.emit('toggle_video', { callId: currentCall.callId });
             log(`📹 Toggled video for call ${currentCall.callId}`);
-            
+
             const btn = document.getElementById('videoBtn');
             btn.textContent = btn.textContent.includes('Video') ? '📹 Video Off' : '📹 Video';
         }
@@ -887,11 +1051,11 @@
 
         function showIncomingCall(callData) {
             currentCall = callData;
-            
+
             document.getElementById('callerName').textContent = callData.caller.username;
             document.getElementById('callType').textContent = `${callData.callType} Call`;
             document.getElementById('callerAvatar').textContent = callData.caller.username.charAt(0).toUpperCase();
-            
+
             document.getElementById('incomingCall').classList.add('show');
         }
 
@@ -903,17 +1067,17 @@
             const historyEl = document.getElementById('callHistory');
             const callEl = document.createElement('div');
             callEl.style.cssText = 'padding: 5px; border-bottom: 1px solid #eee; font-size: 12px;';
-            
+
             const timestamp = new Date().toLocaleTimeString();
             const duration = callData.duration || 'Unknown';
             const type = callData.callType || 'voice';
             const participant = callData.caller?.username || callData.receiver?.username || 'Unknown';
-            
+
             callEl.innerHTML = `
                 <strong>${type} call</strong> with ${participant}<br>
                 <small>Duration: ${duration} | ${timestamp}</small>
             `;
-            
+
             historyEl.insertBefore(callEl, historyEl.firstChild);
         }
 
@@ -927,4 +1091,5 @@
         log('5. Test chat messaging');
     </script>
 </body>
+
 </html>
