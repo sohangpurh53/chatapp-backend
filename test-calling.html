@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat App - Calling Test Interface</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            padding: 20px;
+            min-height: 600px;
+        }
+
+        .panel {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            border: 1px solid #e9ecef;
+        }
+
+        .panel h3 {
+            color: #495057;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #007bff;
+        }
+
+        .auth-section {
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        input, select, button {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ced4da;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+        }
+
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .call-button {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            margin: 5px 0;
+        }
+
+        .video-call-button {
+            background: linear-gradient(135deg, #007bff 0%, #6610f2 100%);
+        }
+
+        .end-call-button {
+            background: linear-gradient(135deg, #dc3545 0%, #fd7e14 100%);
+        }
+
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-weight: 600;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status.calling {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
+        .user-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+
+        .user-item {
+            padding: 10px;
+            border-bottom: 1px solid #dee2e6;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .user-item:hover {
+            background-color: #e9ecef;
+        }
+
+        .user-item.selected {
+            background-color: #007bff;
+            color: white;
+        }
+
+        .chat-messages {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+            background: white;
+        }
+
+        .message {
+            margin-bottom: 10px;
+            padding: 8px;
+            border-radius: 5px;
+            background: #f8f9fa;
+        }
+
+        .message.own {
+            background: #007bff;
+            color: white;
+            margin-left: 20px;
+        }
+
+        .message.other {
+            background: #e9ecef;
+            margin-right: 20px;
+        }
+
+        .logs {
+            height: 300px;
+            overflow-y: auto;
+            background: #212529;
+            color: #28a745;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+
+        .call-controls {
+            display: none;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .call-controls.active {
+            display: grid;
+        }
+
+        .incoming-call {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            z-index: 1000;
+            text-align: center;
+            min-width: 300px;
+        }
+
+        .incoming-call.show {
+            display: block;
+        }
+
+        .caller-info {
+            margin-bottom: 20px;
+        }
+
+        .caller-avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            margin: 0 auto 10px;
+        }
+
+        .call-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+
+        .answer-btn {
+            background: #28a745;
+            border: none;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .decline-btn {
+            background: #dc3545;
+            border: none;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📞 Chat App - Calling Test Interface</h1>
+            <p>Test voice calls, video calls, user search, and real-time chat</p>
+        </div>
+
+        <div class="main-content">
+            <!-- Authentication & Connection Panel -->
+            <div class="panel">
+                <h3>🔐 Authentication & Connection</h3>
+                
+                <div class="auth-section">
+                    <div class="form-group">
+                        <label>Email:</label>
+                        <input type="email" id="email" value="test@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Password:</label>
+                        <input type="password" id="password" value="password123">
+                    </div>
+                    <div class="form-group">
+                        <label>Username (for registration):</label>
+                        <input type="text" id="username" value="testuser">
+                    </div>
+                    <button onclick="login()">Login</button>
+                    <button onclick="register()">Register</button>
+                </div>
+
+                <div id="connectionStatus" class="status disconnected">
+                    Disconnected
+                </div>
+
+                <button onclick="connectSocket()" id="connectBtn" disabled>Connect to Socket</button>
+                <button onclick="disconnectSocket()" id="disconnectBtn" disabled>Disconnect</button>
+            </div>
+
+            <!-- User Search & Chat Panel -->
+            <div class="panel">
+                <h3>👥 Users & Chat</h3>
+                
+                <div class="form-group">
+                    <label>Search Users:</label>
+                    <input type="text" id="searchInput" placeholder="Search by username or email" oninput="searchUsers()">
+                </div>
+
+                <div id="userList" class="user-list">
+                    <!-- Users will be populated here -->
+                </div>
+
+                <div class="form-group">
+                    <label>Selected User:</label>
+                    <input type="text" id="selectedUser" readonly placeholder="Select a user to chat/call">
+                </div>
+
+                <div id="chatMessages" class="chat-messages">
+                    <!-- Chat messages will appear here -->
+                </div>
+
+                <div class="form-group">
+                    <input type="text" id="messageInput" placeholder="Type a message..." onkeypress="handleMessageKeyPress(event)">
+                    <button onclick="sendMessage()">Send Message</button>
+                </div>
+            </div>
+
+            <!-- Calling Panel -->
+            <div class="panel">
+                <h3>📞 Calling Features</h3>
+                
+                <div class="form-group">
+                    <button class="call-button" onclick="initiateVoiceCall()" id="voiceCallBtn" disabled>
+                        📞 Start Voice Call
+                    </button>
+                    <button class="video-call-button" onclick="initiateVideoCall()" id="videoCallBtn" disabled>
+                        📹 Start Video Call
+                    </button>
+                </div>
+
+                <div id="callStatus" class="status" style="display: none;">
+                    No active call
+                </div>
+
+                <div id="callControls" class="call-controls">
+                    <button onclick="toggleAudio()" id="audioBtn">🔇 Mute</button>
+                    <button onclick="toggleVideo()" id="videoBtn">📹 Video</button>
+                    <button class="end-call-button" onclick="endCall()">📞 End Call</button>
+                </div>
+
+                <div class="form-group">
+                    <h4>Call History</h4>
+                    <div id="callHistory" style="max-height: 150px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 5px; padding: 10px;">
+                        <!-- Call history will appear here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="logs" id="logs">
+            <strong>📋 Activity Logs</strong><br>
+            Ready to start testing...<br>
+        </div>
+    </div>
+
+    <!-- Incoming Call Overlay -->
+    <div id="incomingCall" class="incoming-call">
+        <div class="caller-info">
+            <div class="caller-avatar" id="callerAvatar">?</div>
+            <h3 id="callerName">Unknown Caller</h3>
+            <p id="callType">Voice Call</p>
+        </div>
+        <div class="call-actions">
+            <button class="answer-btn" onclick="answerCall()">📞 Answer</button>
+            <button class="decline-btn" onclick="declineCall()">❌ Decline</button>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        let authToken = null;
+        let currentUser = null;
+        let selectedUserId = null;
+        let currentChatId = null;
+        let currentCall = null;
+        let users = [];
+        function getBaseURL(fullUrl) {
+        const urlObj = new URL(fullUrl);
+        return `${urlObj.protocol}//${urlObj.host}`;
+        }
+        const url = window.location.href
+
+        const baseUrl = getBaseURL(url);
+        console.log(baseUrl)
+
+        // Utility functions
+        function log(message) {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            logs.innerHTML += `[${timestamp}] ${message}<br>`;
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function updateConnectionStatus(status, message) {
+            const statusEl = document.getElementById('connectionStatus');
+            statusEl.className = `status ${status}`;
+            statusEl.textContent = message;
+        }
+
+        // Authentication functions
+        async function register() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const username = document.getElementById('username').value;
+
+            try {
+                const response = await fetch(baseUrl+'/api/auth/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password, username })
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    authToken = data.token;
+                    currentUser = data.user;
+                    log(`✅ Registration successful: ${data.user.username}`);
+                    document.getElementById('connectBtn').disabled = false;
+                } else {
+                    log(`❌ Registration failed: ${data.message}`);
+                }
+            } catch (error) {
+                log(`❌ Registration error: ${error.message}`);
+            }
+        }
+
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch(baseUrl+'/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    authToken = data.token;
+                    currentUser = data.user;
+                    log(`✅ Login successful: ${data.user.username}`);
+                    document.getElementById('connectBtn').disabled = false;
+                } else {
+                    log(`❌ Login failed: ${data.message}`);
+                }
+            } catch (error) {
+                log(`❌ Login error: ${error.message}`);
+            }
+        }
+
+        // Socket connection functions
+        function connectSocket() {
+            if (!authToken) {
+                log('❌ Please login first');
+                return;
+            }
+
+            socket = io(baseUrl, {
+                auth: {
+                    token: authToken
+                },
+                transports: ['websocket', 'polling']
+            });
+
+            setupSocketListeners();
+            
+            document.getElementById('connectBtn').disabled = true;
+            document.getElementById('disconnectBtn').disabled = false;
+        }
+
+        function disconnectSocket() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+            }
+            
+            updateConnectionStatus('disconnected', 'Disconnected');
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('disconnectBtn').disabled = true;
+            document.getElementById('voiceCallBtn').disabled = true;
+            document.getElementById('videoCallBtn').disabled = true;
+        }
+
+        function setupSocketListeners() {
+            socket.on('connect', () => {
+                log(`✅ Connected to socket server. Socket ID: ${socket.id}`);
+                updateConnectionStatus('connected', `Connected as ${currentUser.username}`);
+                searchUsers(); // Load users on connect
+            });
+
+            socket.on('connect_error', (error) => {
+                log(`❌ Connection error: ${error.message}`);
+                updateConnectionStatus('disconnected', 'Connection failed');
+            });
+
+            socket.on('disconnect', () => {
+                log('🔌 Disconnected from socket server');
+                updateConnectionStatus('disconnected', 'Disconnected');
+            });
+
+            // Chat events
+            socket.on('new_message', (message) => {
+                log(`📨 New message from ${message.sender.username}: ${message.content}`);
+                displayMessage(message);
+            });
+
+            socket.on('user_typing', (data) => {
+                log(`⌨️ ${data.username} is typing...`);
+            });
+
+            // Call events
+            socket.on('incoming_call', (callData) => {
+                log(`📞 Incoming ${callData.callType} call from ${callData.caller.username}`);
+                showIncomingCall(callData);
+            });
+
+            socket.on('call_answered', (callData) => {
+                log(`✅ Call answered by ${callData.receiver.username}`);
+                updateCallStatus('connected', `Connected with ${callData.receiver.username}`);
+                showCallControls(true);
+            });
+
+            socket.on('call_declined', (callData) => {
+                log(`❌ Call declined by ${callData.receiver.username}`);
+                updateCallStatus('', 'Call declined');
+                showCallControls(false);
+                currentCall = null;
+            });
+
+            socket.on('call_ended', (callData) => {
+                log(`📞 Call ended. Duration: ${callData.duration || 'Unknown'}`);
+                updateCallStatus('', 'Call ended');
+                showCallControls(false);
+                hideIncomingCall();
+                currentCall = null;
+                addToCallHistory(callData);
+            });
+
+            socket.on('call_signal', (signalData) => {
+                log(`🔄 Received WebRTC signal: ${signalData.type}`);
+                // Handle WebRTC signaling here
+            });
+
+            socket.on('user_status_changed', (data) => {
+                log(`👤 ${data.username} is now ${data.isOnline ? 'online' : 'offline'}`);
+                updateUserStatus(data.userId, data.isOnline);
+            });
+
+            socket.on('error', (error) => {
+                log(`❌ Socket error: ${error.message}`);
+            });
+        }
+
+        // User search functions
+        async function searchUsers() {
+            const query = document.getElementById('searchInput').value;
+            
+            if (!authToken) return;
+
+            try {
+                const response = await fetch(baseUrl+`/api/chat/search/users?q=${encodeURIComponent(query)}`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    users = data.users || [];
+                    displayUsers(users);
+                    log(`🔍 Found ${users.length} users`);
+                } else {
+                    log(`❌ Search failed: ${data.message}`);
+                }
+            } catch (error) {
+                log(`❌ Search error: ${error.message}`);
+            }
+        }
+
+        function displayUsers(userList) {
+            const userListEl = document.getElementById('userList');
+            userListEl.innerHTML = '';
+
+            userList.forEach(user => {
+                if (user.id === currentUser.id) return; // Skip current user
+
+                const userEl = document.createElement('div');
+                userEl.className = 'user-item';
+                userEl.innerHTML = `
+                    <strong>${user.username}</strong><br>
+                    <small>${user.email}</small>
+                    <span style="float: right; color: ${user.isOnline ? 'green' : 'gray'};">
+                        ${user.isOnline ? '🟢' : '⚫'}
+                    </span>
+                `;
+                userEl.onclick = () => selectUser(user);
+                userListEl.appendChild(userEl);
+            });
+        }
+
+        function selectUser(user) {
+            selectedUserId = user.id;
+            document.getElementById('selectedUser').value = `${user.username} (${user.email})`;
+            
+            // Remove previous selection
+            document.querySelectorAll('.user-item').forEach(el => el.classList.remove('selected'));
+            
+            // Add selection to clicked item
+            event.target.closest('.user-item').classList.add('selected');
+            
+            // Enable call buttons
+            document.getElementById('voiceCallBtn').disabled = false;
+            document.getElementById('videoCallBtn').disabled = false;
+            
+            log(`👤 Selected user: ${user.username}`);
+            
+            // Create or get chat with this user
+            createDirectChat(user.id);
+        }
+
+        function updateUserStatus(userId, isOnline) {
+            const userItems = document.querySelectorAll('.user-item');
+            userItems.forEach(item => {
+                // This is a simplified update - in a real app you'd match by user ID
+                const statusSpan = item.querySelector('span');
+                if (statusSpan) {
+                    statusSpan.innerHTML = isOnline ? '🟢' : '⚫';
+                    statusSpan.style.color = isOnline ? 'green' : 'gray';
+                }
+            });
+        }
+
+        // Chat functions
+        async function createDirectChat(participantId) {
+            try {
+                const response = await fetch(baseUrl+'/api/chat/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({
+                        participantIds: [participantId],
+                        isGroup: false
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    currentChatId = data.chat.id;
+                    log(`💬 Chat created/found: ${data.chat.id}`);
+                    
+                    // Join the chat room
+                    if (socket) {
+                        socket.emit('join_chat', { chatId: currentChatId });
+                    }
+                    
+                    // Load existing messages
+                    loadChatMessages(currentChatId);
+                } else {
+                    log(`❌ Chat creation failed: ${data.message}`);
+                }
+            } catch (error) {
+                log(`❌ Chat creation error: ${error.message}`);
+            }
+        }
+
+        async function loadChatMessages(chatId) {
+            try {
+                const response = await fetch(baseUrl+`/api/chat/${chatId}/messages`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const messagesEl = document.getElementById('chatMessages');
+                    messagesEl.innerHTML = '';
+                    
+                    data.messages.forEach(message => {
+                        displayMessage(message);
+                    });
+                    
+                    log(`📨 Loaded ${data.messages.length} messages`);
+                } else {
+                    log(`❌ Failed to load messages: ${data.message}`);
+                }
+            } catch (error) {
+                log(`❌ Message loading error: ${error.message}`);
+            }
+        }
+
+        function displayMessage(message) {
+            const messagesEl = document.getElementById('chatMessages');
+            const messageEl = document.createElement('div');
+            messageEl.className = `message ${message.senderId === currentUser.id ? 'own' : 'other'}`;
+            
+            const timestamp = new Date(message.createdAt).toLocaleTimeString();
+            messageEl.innerHTML = `
+                <strong>${message.sender.username}</strong> <small>${timestamp}</small><br>
+                ${message.content}
+            `;
+            
+            messagesEl.appendChild(messageEl);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const content = messageInput.value.trim();
+            
+            if (!content || !currentChatId || !socket) return;
+
+            socket.emit('send_message', {
+                chatId: currentChatId,
+                content: content,
+                messageType: 'text'
+            });
+
+            messageInput.value = '';
+            log(`📤 Sent message: ${content}`);
+        }
+
+        function handleMessageKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        // Calling functions
+        function initiateVoiceCall() {
+            if (!selectedUserId || !socket) {
+                log('❌ Please select a user and connect to socket first');
+                return;
+            }
+
+            const callData = {
+                receiverId: selectedUserId,
+                callType: 'voice',
+                chatId: currentChatId
+            };
+
+            socket.emit('initiate_call', callData);
+            log(`📞 Initiating voice call to user ${selectedUserId}`);
+            
+            currentCall = {
+                ...callData,
+                callId: Date.now().toString(), // Temporary ID
+                status: 'calling'
+            };
+            
+            updateCallStatus('calling', 'Calling...');
+        }
+
+        function initiateVideoCall() {
+            if (!selectedUserId || !socket) {
+                log('❌ Please select a user and connect to socket first');
+                return;
+            }
+
+            const callData = {
+                receiverId: selectedUserId,
+                callType: 'video',
+                chatId: currentChatId
+            };
+
+            socket.emit('initiate_call', callData);
+            log(`📹 Initiating video call to user ${selectedUserId}`);
+            
+            currentCall = {
+                ...callData,
+                callId: Date.now().toString(), // Temporary ID
+                status: 'calling'
+            };
+            
+            updateCallStatus('calling', 'Video calling...');
+        }
+
+        function answerCall() {
+            if (!currentCall || !socket) return;
+
+            socket.emit('answer_call', { callId: currentCall.callId });
+            log(`✅ Answering call ${currentCall.callId}`);
+            
+            hideIncomingCall();
+            updateCallStatus('connected', 'Call connected');
+            showCallControls(true);
+        }
+
+        function declineCall() {
+            if (!currentCall || !socket) return;
+
+            socket.emit('decline_call', { callId: currentCall.callId });
+            log(`❌ Declining call ${currentCall.callId}`);
+            
+            hideIncomingCall();
+            currentCall = null;
+        }
+
+        function endCall() {
+            if (!currentCall || !socket) return;
+
+            socket.emit('end_call', { callId: currentCall.callId });
+            log(`📞 Ending call ${currentCall.callId}`);
+            
+            updateCallStatus('', 'Call ended');
+            showCallControls(false);
+            hideIncomingCall();
+            currentCall = null;
+        }
+
+        function toggleAudio() {
+            if (!currentCall || !socket) return;
+
+            socket.emit('toggle_audio', { callId: currentCall.callId });
+            log(`🔇 Toggled audio for call ${currentCall.callId}`);
+            
+            const btn = document.getElementById('audioBtn');
+            btn.textContent = btn.textContent.includes('Mute') ? '🔊 Unmute' : '🔇 Mute';
+        }
+
+        function toggleVideo() {
+            if (!currentCall || !socket) return;
+
+            socket.emit('toggle_video', { callId: currentCall.callId });
+            log(`📹 Toggled video for call ${currentCall.callId}`);
+            
+            const btn = document.getElementById('videoBtn');
+            btn.textContent = btn.textContent.includes('Video') ? '📹 Video Off' : '📹 Video';
+        }
+
+        // UI helper functions
+        function updateCallStatus(status, message) {
+            const statusEl = document.getElementById('callStatus');
+            statusEl.style.display = message ? 'block' : 'none';
+            statusEl.className = `status ${status}`;
+            statusEl.textContent = message;
+        }
+
+        function showCallControls(show) {
+            const controlsEl = document.getElementById('callControls');
+            controlsEl.className = show ? 'call-controls active' : 'call-controls';
+        }
+
+        function showIncomingCall(callData) {
+            currentCall = callData;
+            
+            document.getElementById('callerName').textContent = callData.caller.username;
+            document.getElementById('callType').textContent = `${callData.callType} Call`;
+            document.getElementById('callerAvatar').textContent = callData.caller.username.charAt(0).toUpperCase();
+            
+            document.getElementById('incomingCall').classList.add('show');
+        }
+
+        function hideIncomingCall() {
+            document.getElementById('incomingCall').classList.remove('show');
+        }
+
+        function addToCallHistory(callData) {
+            const historyEl = document.getElementById('callHistory');
+            const callEl = document.createElement('div');
+            callEl.style.cssText = 'padding: 5px; border-bottom: 1px solid #eee; font-size: 12px;';
+            
+            const timestamp = new Date().toLocaleTimeString();
+            const duration = callData.duration || 'Unknown';
+            const type = callData.callType || 'voice';
+            const participant = callData.caller?.username || callData.receiver?.username || 'Unknown';
+            
+            callEl.innerHTML = `
+                <strong>${type} call</strong> with ${participant}<br>
+                <small>Duration: ${duration} | ${timestamp}</small>
+            `;
+            
+            historyEl.insertBefore(callEl, historyEl.firstChild);
+        }
+
+        // Initialize
+        log('🚀 Chat App Calling Test Interface loaded');
+        log('📋 Instructions:');
+        log('1. Login or Register with credentials');
+        log('2. Connect to Socket.IO server');
+        log('3. Search and select a user');
+        log('4. Start voice or video calls');
+        log('5. Test chat messaging');
+    </script>
+</body>
+</html>
