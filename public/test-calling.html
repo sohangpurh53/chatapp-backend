@@ -336,6 +336,15 @@
                         <button onclick="searchUsers()" style="flex: 1;">🔍 Search</button>
                         <button onclick="loadAllUsers()" style="flex: 1; background: #28a745;">👥 Load All</button>
                     </div>
+                    <div style="margin-top: 10px;">
+                        <small style="color: #6c757d;">Quick search:</small><br>
+                        <div style="display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap;">
+                            <button onclick="quickSearch('alice')" style="font-size: 11px; padding: 5px;">alice</button>
+                            <button onclick="quickSearch('bob')" style="font-size: 11px; padding: 5px;">bob</button>
+                            <button onclick="quickSearch('test')" style="font-size: 11px; padding: 5px;">test</button>
+                            <button onclick="quickSearch('user')" style="font-size: 11px; padding: 5px;">user</button>
+                        </div>
+                    </div>
                 </div>
 
                 <div id="userList" class="user-list">
@@ -361,6 +370,13 @@
             <!-- Calling Panel -->
             <div class="panel">
                 <h3>📞 Calling Features</h3>
+
+                <div id="callingInstructions" style="background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 12px;">
+                    <strong>📋 To make calls:</strong><br>
+                    1. Connect to Socket (left panel)<br>
+                    2. Search & select a user (above)<br>
+                    3. Click call buttons below
+                </div>
 
                 <div class="form-group">
                     <button class="call-button" onclick="initiateVoiceCall()" id="voiceCallBtn" disabled>
@@ -597,6 +613,14 @@
             socket.on('connect', () => {
                 log(`✅ Connected to socket server. Socket ID: ${socket.id}`);
                 updateConnectionStatus('connected', `Connected as ${currentUser.username}`);
+                
+                // Enable call buttons if user is already selected
+                if (selectedUserId) {
+                    document.getElementById('voiceCallBtn').disabled = false;
+                    document.getElementById('videoCallBtn').disabled = false;
+                    document.getElementById('callingInstructions').style.display = 'none';
+                }
+                
                 log('💡 Use "Create Test Users" button or search for users to start testing');
             });
 
@@ -686,7 +710,7 @@
             try {
                 log(`🔍 Searching for users: "${query}"`);
 
-                const response = await fetch(baseUrl + `/api/chat/search/users?q=${encodeURIComponent(query)}`, {
+                const response = await fetch(baseUrl + `/api/chat/search/users?query=${encodeURIComponent(query)}`, {
                     headers: {
                         'Authorization': `Bearer ${authToken}`
                     }
@@ -699,7 +723,7 @@
                     displayUsers(users);
                     log(`✅ Found ${users.length} users for "${query}"`);
                 } else {
-                    log(`❌ Search failed: ${data.message}`);
+                    log(`❌ Search failed: ${data.error || data.message}`);
                     users = [];
                     displayUsers(users);
                 }
@@ -726,7 +750,7 @@
 
                 for (const query of searchQueries) {
                     try {
-                        const response = await fetch(baseUrl + `/api/chat/search/users?q=${encodeURIComponent(query)}`, {
+                        const response = await fetch(baseUrl + `/api/chat/search/users?query=${encodeURIComponent(query)}`, {
                             headers: {
                                 'Authorization': `Bearer ${authToken}`
                             }
@@ -735,16 +759,19 @@
                         const data = await response.json();
 
                         if (response.ok && data.users) {
+                            log(`✅ Found ${data.users.length} users for pattern "${query}"`);
                             // Add users that aren't already in the list
                             data.users.forEach(user => {
                                 if (!allUsers.find(u => u.id === user.id)) {
                                     allUsers.push(user);
                                 }
                             });
+                        } else {
+                            log(`⚠️ Search for "${query}" failed: ${data.error || data.message || 'Unknown error'}`);
                         }
                     } catch (error) {
                         // Continue with other queries if one fails
-                        console.log(`Search for "${query}" failed:`, error);
+                        log(`❌ Search for "${query}" error: ${error.message}`);
                     }
                 }
 
@@ -760,6 +787,12 @@
                 users = [];
                 displayUsers(users);
             }
+        }
+
+        // Quick search function
+        async function quickSearch(searchTerm) {
+            document.getElementById('searchInput').value = searchTerm;
+            await searchUsers();
         }
 
         function displayUsers(userList) {
@@ -812,9 +845,16 @@
             // Add selection to clicked item
             event.target.closest('.user-item').classList.add('selected');
 
-            // Enable call buttons
-            document.getElementById('voiceCallBtn').disabled = false;
-            document.getElementById('videoCallBtn').disabled = false;
+            // Enable call buttons only if socket is connected
+            if (socket && socket.connected) {
+                document.getElementById('voiceCallBtn').disabled = false;
+                document.getElementById('videoCallBtn').disabled = false;
+                document.getElementById('callingInstructions').style.display = 'none';
+            } else {
+                log('⚠️ Connect to socket first to enable calling');
+                document.getElementById('voiceCallBtn').disabled = true;
+                document.getElementById('videoCallBtn').disabled = true;
+            }
 
             log(`👤 Selected user: ${user.username}`);
 
@@ -936,8 +976,12 @@
 
         // Calling functions
         function initiateVoiceCall() {
-            if (!selectedUserId || !socket) {
-                log('❌ Please select a user and connect to socket first');
+            if (!socket) {
+                log('❌ Please connect to socket first');
+                return;
+            }
+            if (!selectedUserId) {
+                log('❌ Please select a user first');
                 return;
             }
 
@@ -960,8 +1004,12 @@
         }
 
         function initiateVideoCall() {
-            if (!selectedUserId || !socket) {
-                log('❌ Please select a user and connect to socket first');
+            if (!socket) {
+                log('❌ Please connect to socket first');
+                return;
+            }
+            if (!selectedUserId) {
+                log('❌ Please select a user first');
                 return;
             }
 
