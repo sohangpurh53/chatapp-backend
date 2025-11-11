@@ -7,10 +7,12 @@ require('dotenv').config();
 const { sequelize } = require('./models');
 const { authenticateSocket } = require('./middleware/auth');
 const SocketHandlers = require('./socket/socketHandlers');
+const redisService = require('./config/redis');
 
 // Import routes
 const authRoutes = require('./routes/auth');
 const chatRoutes = require('./routes/chat');
+const callRoutes = require('./routes/calls');
 
 const app = express();
 const server = http.createServer(app);
@@ -32,6 +34,7 @@ app.use(express.static('public'));
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/calls', callRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

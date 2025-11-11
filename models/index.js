@@ -3,6 +3,7 @@ const User = require('./User');
 const Chat = require('./Chat');
 const Message = require('./Message');
 const ChatParticipant = require('./ChatParticipant');
+const Call = require('./Call');
 
 // Define associations
 User.hasMany(Message, { foreignKey: 'senderId', as: 'sentMessages' });
@@ -33,10 +34,18 @@ ChatParticipant.belongsTo(Chat, { foreignKey: 'chatId', as: 'chat' });
 
 Chat.belongsTo(User, { foreignKey: 'createdBy', as: 'creator' });
 
+// Call associations
+User.hasMany(Call, { foreignKey: 'callerId', as: 'initiatedCalls' });
+User.hasMany(Call, { foreignKey: 'receiverId', as: 'receivedCalls' });
+Call.belongsTo(User, { foreignKey: 'callerId', as: 'caller' });
+Call.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
+Call.belongsTo(Chat, { foreignKey: 'chatId', as: 'chat' });
+
 module.exports = {
   sequelize,
   User,
   Chat,
   Message,
-  ChatParticipant
+  ChatParticipant,
+  Call
 };

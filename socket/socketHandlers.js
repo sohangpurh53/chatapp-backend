@@ -1,18 +1,22 @@
-const { Message, User, Chat, ChatParticipant } = require('../models');
+const { Message, User, Chat, ChatParticipant, Call } = require('../models');
+const redisService = require('../config/redis');
+const { v4: uuidv4 } = require('uuid');
 
 class SocketHandlers {
   constructor(io) {
     this.io = io;
     this.connectedUsers = new Map(); // userId -> socketId
     this.typingUsers = new Map(); // chatId -> Set of userIds
+    this.activeCalls = new Map(); // callId -> callData
+    this.userCalls = new Map(); // userId -> callId
   }
 
   handleConnection(socket) {
     console.log(`User ${socket.user.username} connected`);
-    
+
     // Store user connection
     this.connectedUsers.set(socket.userId, socket.id);
-    
+
     // Update user online status
     this.updateUserOnlineStatus(socket.userId, true);
 
@@ -26,7 +30,18 @@ class SocketHandlers {
     socket.on('typing_start', (data) => this.handleTypingStart(socket, data));
     socket.on('typing_stop', (data) => this.handleTypingStop(socket, data));
     socket.on('message_read', (data) => this.handleMessageRead(socket, data));
-    
+
+    // Call events
+    socket.on('initiate_call', (data) => this.handleInitiateCall(socket, data));
+    socket.on('answer_call', (data) => this.handleAnswerCall(socket, data));
+    socket.on('decline_call', (data) => this.handleDeclineCall(socket, data));
+    socket.on('end_call', (data) => this.handleEndCall(socket, data));
+    socket.on('call_signal', (data) => this.handleCallSignal(socket, data));
+    socket.on('toggle_audio', (data) => this.handleToggleAudio(socket, data));
+    socket.on('toggle_video', (data) => this.handleToggleVideo(socket, data));
+    socket.on('share_screen', (data) => this.handleShareScreen(socket, data));
+    socket.on('stop_screen_share', (data) => this.handleStopScreenShare(socket, data));
+
     socket.on('disconnect', () => this.handleDisconnect(socket));
   }
 
@@ -52,7 +67,7 @@ class SocketHandlers {
   handleJoinChat(socket, data) {
     const { chatId } = data;
     socket.join(`chat_${chatId}`);
-    
+
     // Notify others that user joined
     socket.to(`chat_${chatId}`).emit('user_joined', {
       userId: socket.userId,
@@ -63,7 +78,7 @@ class SocketHandlers {
   handleLeaveChat(socket, data) {
     const { chatId } = data;
     socket.leave(`chat_${chatId}`);
-    
+
     // Notify others that user left
     socket.to(`chat_${chatId}`).emit('user_left', {
       userId: socket.userId,
@@ -126,13 +141,13 @@ class SocketHandlers {
 
   handleTypingStart(socket, data) {
     const { chatId } = data;
-    
+
     if (!this.typingUsers.has(chatId)) {
       this.typingUsers.set(chatId, new Set());
     }
-    
+
     this.typingUsers.get(chatId).add(socket.userId);
-    
+
     // Notify others in the chat
     socket.to(`chat_${chatId}`).emit('user_typing', {
       userId: socket.userId,
@@ -143,15 +158,15 @@ class SocketHandlers {
 
   handleTypingStop(socket, data) {
     const { chatId } = data;
-    
+
     if (this.typingUsers.has(chatId)) {
       this.typingUsers.get(chatId).delete(socket.userId);
-      
+
       if (this.typingUsers.get(chatId).size === 0) {
         this.typingUsers.delete(chatId);
       }
     }
-    
+
     // Notify others in the chat
     socket.to(`chat_${chatId}`).emit('user_typing', {
       userId: socket.userId,
@@ -162,7 +177,7 @@ class SocketHandlers {
 
   handleMessageRead(socket, data) {
     const { messageId, chatId } = data;
-    
+
     // Notify sender that message was read
     socket.to(`chat_${chatId}`).emit('message_read', {
       messageId,
@@ -173,25 +188,46 @@ class SocketHandlers {
 
   async handleDisconnect(socket) {
     console.log(`User ${socket.user.username} disconnected`);
-    
+
+    // Handle active call cleanup
+    const userCallId = this.userCalls?.get(socket?.userId);
+    if (userCallId) {
+      await this.endCall(userCallId, 'network_error');
+
+      // Notify other participant about disconnection
+      const callData = await redisService.getActiveCall(userCallId);
+      if (callData) {
+        const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
+        const otherSocketId = this.connectedUsers.get(otherUserId);
+
+        if (otherSocketId) {
+          this.io.to(otherSocketId).emit('call_ended', {
+            callId: userCallId,
+            endedBy: socket.userId,
+            reason: 'network_error'
+          });
+        }
+      }
+    }
+
     // Remove from connected users
     this.connectedUsers.delete(socket.userId);
-    
+
     // Update user offline status
     await this.updateUserOnlineStatus(socket.userId, false);
-    
+
     // Clean up typing status
     this.typingUsers.forEach((users, chatId) => {
       if (users.has(socket.userId)) {
         users.delete(socket.userId);
-        
+
         // Notify others that user stopped typing
         socket.to(`chat_${chatId}`).emit('user_typing', {
           userId: socket.userId,
           username: socket.user.username,
           isTyping: false
         });
-        
+
         if (users.size === 0) {
           this.typingUsers.delete(chatId);
         }
@@ -202,12 +238,19 @@ class SocketHandlers {
   async updateUserOnlineStatus(userId, isOnline) {
     try {
       await User.update(
-        { 
-          isOnline, 
-          lastSeen: new Date() 
+        {
+          isOnline,
+          lastSeen: new Date()
         },
         { where: { id: userId } }
       );
+
+      // Update Redis cache
+      if (isOnline) {
+        await redisService.setUserOnline(userId, this.connectedUsers.get(userId));
+      } else {
+        await redisService.setUserOffline(userId);
+      }
 
       // Notify all connected users about status change
       this.io.emit('user_status_changed', {
@@ -217,6 +260,398 @@ class SocketHandlers {
       });
     } catch (error) {
       console.error('Error updating user online status:', error);
+    }
+  }
+
+  // Call handling methods
+  async handleInitiateCall(socket, data) {
+    try {
+      const { receiverId, callType = 'voice', chatId } = data;
+      const callId = uuidv4();
+
+      // Check if receiver is online
+      const receiverSocketId = this.connectedUsers.get(receiverId);
+      if (!receiverSocketId) {
+        socket.emit('call_error', { message: 'User is offline' });
+        return;
+      }
+
+      // Check if user is already in a call
+      const existingCall = await redisService.getUserCallStatus(socket.userId);
+      if (existingCall) {
+        socket.emit('call_error', { message: 'You are already in a call' });
+        return;
+      }
+
+      const receiverCall = await redisService.getUserCallStatus(receiverId);
+      if (receiverCall) {
+        socket.emit('call_error', { message: 'User is busy' });
+        return;
+      }
+
+      // Create call record
+      const call = await Call.create({
+        id: callId,
+        callerId: socket.userId,
+        receiverId,
+        chatId,
+        callType,
+        status: 'initiated'
+      });
+
+      // Store call in Redis
+      const callData = {
+        id: callId,
+        callerId: socket.userId,
+        receiverId,
+        chatId,
+        callType,
+        status: 'ringing',
+        startedAt: new Date(),
+        participants: [socket.userId, receiverId]
+      };
+
+      await redisService.setActiveCall(callId, callData);
+      await redisService.setUserCallStatus(socket.userId, callId, 'calling');
+      await redisService.setUserCallStatus(receiverId, callId, 'receiving');
+
+      // Store call mapping
+      this.activeCalls.set(callId, callData);
+      this.userCalls.set(socket.userId, callId);
+      this.userCalls.set(receiverId, callId);
+
+      // Get caller info
+      const caller = await User.findByPk(socket.userId, {
+        attributes: ['id', 'username', 'avatar']
+      });
+
+      // Notify receiver
+      this.io.to(receiverSocketId).emit('incoming_call', {
+        callId,
+        caller,
+        callType,
+        chatId
+      });
+
+      // Confirm to caller and store call reference
+      socket.emit('call_initiated', {
+        callId,
+        receiverId,
+        callType,
+        status: 'ringing'
+      });
+
+      // Store the call ID in the socket for easy access
+      socket.currentCallId = callId;
+
+      // Set timeout for missed call
+      setTimeout(async () => {
+        const currentCall = await redisService.getActiveCall(callId);
+        if (currentCall && currentCall.status === 'ringing') {
+          await this.handleMissedCall(callId);
+        }
+      }, 30000); // 30 seconds timeout
+
+    } catch (error) {
+      console.error('Initiate call error:', error);
+      socket.emit('call_error', { message: 'Failed to initiate call' });
+    }
+  }
+
+  async handleAnswerCall(socket, data) {
+    try {
+      const { callId } = data;
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData || callData.receiverId !== socket.userId) {
+        socket.emit('call_error', { message: 'Invalid call' });
+        return;
+      }
+
+      // Update call status
+      callData.status = 'answered';
+      callData.answeredAt = new Date();
+
+      await redisService.setActiveCall(callId, callData);
+      await Call.update(
+        {
+          status: 'answered',
+          startedAt: new Date()
+        },
+        { where: { id: callId } }
+      );
+
+      // Store the call ID in the socket for easy access
+      socket.currentCallId = callId;
+
+      // Notify caller that call was answered (without signal - WebRTC will handle separately)
+      const callerSocketId = this.connectedUsers.get(callData.callerId);
+      if (callerSocketId) {
+        this.io.to(callerSocketId).emit('call_answered', {
+          callId,
+          receiverId: socket.userId
+        });
+      }
+
+      socket.emit('call_connected', { callId });
+
+    } catch (error) {
+      console.error('Answer call error:', error);
+      socket.emit('call_error', { message: 'Failed to answer call' });
+    }
+  }
+
+  async handleDeclineCall(socket, data) {
+    try {
+      const { callId } = data;
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData || callData.receiverId !== socket.userId) {
+        socket.emit('call_error', { message: 'Invalid call' });
+        return;
+      }
+
+      await this.endCall(callId, 'declined');
+
+      // Notify caller
+      const callerSocketId = this.connectedUsers.get(callData.callerId);
+      if (callerSocketId) {
+        this.io.to(callerSocketId).emit('call_declined', { callId });
+      }
+
+    } catch (error) {
+      console.error('Decline call error:', error);
+      socket.emit('call_error', { message: 'Failed to decline call' });
+    }
+  }
+
+  async handleEndCall(socket, data) {
+    try {
+      const { callId } = data;
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData) {
+        return;
+      }
+
+      // Check if user is part of the call
+      if (callData.callerId !== socket.userId && callData.receiverId !== socket.userId) {
+        socket.emit('call_error', { message: 'Not authorized to end this call' });
+        return;
+      }
+
+      await this.endCall(callId, 'normal');
+
+      // Notify other participant
+      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
+      const otherSocketId = this.connectedUsers.get(otherUserId);
+
+      if (otherSocketId) {
+        this.io.to(otherSocketId).emit('call_ended', {
+          callId,
+          endedBy: socket.userId,
+          reason: 'user_ended'
+        });
+      }
+
+    } catch (error) {
+      console.error('End call error:', error);
+      socket.emit('call_error', { message: 'Failed to end call' });
+    }
+  }
+
+  async handleCallSignal(socket, data) {
+    try {
+      const { callId, signal, targetUserId } = data;
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData) {
+        return;
+      }
+
+      // Forward signal to target user
+      const targetSocketId = this.connectedUsers.get(targetUserId);
+      if (targetSocketId) {
+        this.io.to(targetSocketId).emit('call_signal', {
+          callId,
+          signal,
+          fromUserId: socket.userId
+        });
+      }
+
+    } catch (error) {
+      console.error('Call signal error:', error);
+    }
+  }
+
+  async handleToggleAudio(socket, data) {
+    try {
+      const { callId, muted } = data;
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData) {
+        return;
+      }
+
+      // Notify other participant
+      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
+      const otherSocketId = this.connectedUsers.get(otherUserId);
+
+      if (otherSocketId) {
+        this.io.to(otherSocketId).emit('participant_audio_toggle', {
+          callId,
+          userId: socket.userId,
+          muted
+        });
+      }
+
+    } catch (error) {
+      console.error('Toggle audio error:', error);
+    }
+  }
+
+  async handleToggleVideo(socket, data) {
+    try {
+      const { callId, videoEnabled } = data;
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData) {
+        return;
+      }
+
+      // Notify other participant
+      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
+      const otherSocketId = this.connectedUsers.get(otherUserId);
+
+      if (otherSocketId) {
+        this.io.to(otherSocketId).emit('participant_video_toggle', {
+          callId,
+          userId: socket.userId,
+          videoEnabled
+        });
+      }
+
+    } catch (error) {
+      console.error('Toggle video error:', error);
+    }
+  }
+
+  async handleShareScreen(socket, data) {
+    try {
+      const { callId } = data;
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData) {
+        return;
+      }
+
+      // Update call data
+      callData.screenSharing = {
+        userId: socket.userId,
+        startedAt: new Date()
+      };
+
+      await redisService.setActiveCall(callId, callData);
+
+      // Notify other participant
+      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
+      const otherSocketId = this.connectedUsers.get(otherUserId);
+
+      if (otherSocketId) {
+        this.io.to(otherSocketId).emit('screen_share_started', {
+          callId,
+          userId: socket.userId
+        });
+      }
+
+    } catch (error) {
+      console.error('Share screen error:', error);
+    }
+  }
+
+  async handleStopScreenShare(socket, data) {
+    try {
+      const { callId } = data;
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData) {
+        return;
+      }
+
+      // Update call data
+      delete callData.screenSharing;
+      await redisService.setActiveCall(callId, callData);
+
+      // Notify other participant
+      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
+      const otherSocketId = this.connectedUsers.get(otherUserId);
+
+      if (otherSocketId) {
+        this.io.to(otherSocketId).emit('screen_share_stopped', {
+          callId,
+          userId: socket.userId
+        });
+      }
+
+    } catch (error) {
+      console.error('Stop screen share error:', error);
+    }
+  }
+
+  async handleMissedCall(callId) {
+    try {
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData) {
+        return;
+      }
+
+      await this.endCall(callId, 'missed');
+
+      // Notify caller about missed call
+      const callerSocketId = this.connectedUsers.get(callData.callerId);
+      if (callerSocketId) {
+        this.io.to(callerSocketId).emit('call_missed', { callId });
+      }
+
+    } catch (error) {
+      console.error('Handle missed call error:', error);
+    }
+  }
+
+  async endCall(callId, reason = 'normal') {
+    try {
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData) {
+        return;
+      }
+
+      const duration = callData.answeredAt
+        ? Math.floor((new Date() - new Date(callData.answeredAt)) / 1000)
+        : 0;
+
+      // Update database
+      await Call.update(
+        {
+          status: reason === 'missed' ? 'missed' : 'ended',
+          endedAt: new Date(),
+          duration,
+          endReason: reason
+        },
+        { where: { id: callId } }
+      );
+
+      // Clean up Redis
+      await redisService.deleteActiveCall(callId);
+      await redisService.deleteUserCallStatus(callData.callerId);
+      await redisService.deleteUserCallStatus(callData.receiverId);
+
+      // Clean up memory
+      this.activeCalls.delete(callId);
+      this.userCalls.delete(callData.callerId);
+      this.userCalls.delete(callData.receiverId);
+
+    } catch (error) {
+      console.error('End call cleanup error:', error);
     }
   }
 

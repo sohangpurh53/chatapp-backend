@@ -9,3 +9,4 @@ yarn-error.log
 package-lock.json
 yarnlock.json
 .env
+.env.prod
