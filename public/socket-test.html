@@ -57,9 +57,14 @@
     <script>
         let socket = null;
         let token = null;
+        function getBaseURL(fullUrl) {
+        const urlObj = new URL(fullUrl);
+        return `${urlObj.protocol}//${urlObj.host}`;
+        }
         const url = window.location.href
 
-        console.log(url)
+        const baseUrl = getBaseURL(url);
+        console.log(baseUrl)
 
         function log(message) {
             const logDiv = document.getElementById('log');
@@ -98,7 +103,7 @@
                 log('Connecting without authentication');
             }
 
-            socket = io(url, options);
+            socket = io(baseUrl, options);
 
             socket.on('connect', () => {
                 log('✅ Connected successfully!');
