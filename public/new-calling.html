@@ -547,8 +547,6 @@
 
                 <div class="form-group">
                     <h4>Audio Test</h4>
-                    <button onclick="checkMediaDevices()" style="background: #6f42c1; margin: 2px;">📱 Check
-                        Devices</button>
                     <button onclick="testMicrophone()" style="background: #17a2b8; margin: 2px;">🎤 Test Mic</button>
                     <button onclick="testSpeakers()" style="background: #17a2b8; margin: 2px;">🔊 Test Speakers</button>
                     <div id="audioTestResult"
@@ -1059,8 +1057,8 @@
                 localStream = await navigator.mediaDevices.getUserMedia(constraints);
 
                 // Verify we got the expected tracks
-                const audioTracks = localStream.getAudioTracks();
-                const videoTracks = localStream.getVideoTracks();
+                // const audioTracks = localStream.getAudioTracks();
+                // const videoTracks = localStream.getVideoTracks();
 
                 if (audioTracks.length === 0) {
                     throw new Error('No audio track obtained from getUserMedia');
@@ -1104,43 +1102,7 @@
                 return true;
             } catch (error) {
                 log(`❌ Error initializing peer connection: ${error.message}`);
-
-                // Provide more specific error messages
-                let errorMessage = error.message;
-                if (error.name === 'NotAllowedError') {
-                    errorMessage = 'Camera/microphone access denied. Please allow permissions and try again.';
-                } else if (error.name === 'NotFoundError') {
-                    errorMessage = 'No camera/microphone found. Please check your devices.';
-                } else if (error.name === 'NotReadableError') {
-                    errorMessage = 'Camera/microphone is already in use by another application.';
-                } else if (error.name === 'OverconstrainedError') {
-                    errorMessage = 'Camera/microphone constraints cannot be satisfied. Trying with basic settings...';
-
-                    // Try with simpler constraints
-                    try {
-                        log('🔄 Retrying with basic audio constraints...');
-                        const basicConstraints = {
-                            audio: true,
-                            video: callType === 'video' ? true : false
-                        };
-
-                        localStream = await navigator.mediaDevices.getUserMedia(basicConstraints);
-
-                        // Add tracks to peer connection
-                        localStream.getTracks().forEach(track => {
-                            peerConnection.addTrack(track, localStream);
-                            log(`➕ Added ${track.kind} track with basic constraints`);
-                        });
-
-                        log('✅ Peer connection initialized with basic constraints');
-                        return true;
-
-                    } catch (retryError) {
-                        errorMessage = `Failed even with basic settings: ${retryError.message}`;
-                    }
-                }
-
-                alert(`Failed to access camera/microphone: ${errorMessage}`);
+                alert(`Failed to access camera/microphone: ${error.message}`);
                 return false;
             }
         }
@@ -2009,47 +1971,12 @@
             }
         }
 
-        // Media device enumeration
-        async function checkMediaDevices() {
-            try {
-                if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-                    log('❌ Media devices API not supported');
-                    return false;
-                }
-
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const audioInputs = devices.filter(device => device.kind === 'audioinput');
-                const videoInputs = devices.filter(device => device.kind === 'videoinput');
-                const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
-
-                log(`🎤 Audio inputs found: ${audioInputs.length}`);
-                log(`📹 Video inputs found: ${videoInputs.length}`);
-                log(`🔊 Audio outputs found: ${audioOutputs.length}`);
-
-                audioInputs.forEach((device, index) => {
-                    log(`  Microphone ${index + 1}: ${device.label || 'Unknown device'}`);
-                });
-
-                return audioInputs.length > 0;
-            } catch (error) {
-                log(`❌ Error checking media devices: ${error.message}`);
-                return false;
-            }
-        }
-
         // Audio testing functions
         async function testMicrophone() {
             try {
                 log('🎤 Testing microphone...');
                 const testResult = document.getElementById('audioTestResult');
                 testResult.textContent = 'Testing microphone...';
-
-                // First check if devices are available
-                const hasDevices = await checkMediaDevices();
-                if (!hasDevices) {
-                    testResult.textContent = '❌ No microphone devices found';
-                    return;
-                }
 
                 const stream = await navigator.mediaDevices.getUserMedia({
                     audio: {
@@ -2118,13 +2045,13 @@
         function checkFunctions() {
             const functions = ['login', 'register', 'searchUsers', 'loadAllUsers', 'testMicrophone', 'testSpeakers', 'debounceSearch'];
             const missing = [];
-
+            
             functions.forEach(funcName => {
                 if (typeof window[funcName] !== 'function') {
                     missing.push(funcName);
                 }
             });
-
+            
             if (missing.length > 0) {
                 log(`❌ Missing functions: ${missing.join(', ')}`);
                 console.error('Missing functions:', missing);
@@ -2140,7 +2067,6 @@
         window.loadAllUsers = loadAllUsers;
         window.testMicrophone = testMicrophone;
         window.testSpeakers = testSpeakers;
-        window.checkMediaDevices = checkMediaDevices;
         window.debounceSearch = debounceSearch;
         window.quickSearch = quickSearch;
         window.createTestUsers = createTestUsers;
