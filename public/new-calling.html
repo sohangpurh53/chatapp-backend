@@ -537,6 +537,15 @@
                 </div>
 
                 <div class="form-group">
+                    <h4>Audio Test</h4>
+                    <button onclick="testMicrophone()" style="background: #17a2b8; margin: 2px;">🎤 Test Mic</button>
+                    <button onclick="testSpeakers()" style="background: #17a2b8; margin: 2px;">🔊 Test Speakers</button>
+                    <div id="audioTestResult" style="font-size: 12px; margin-top: 5px; padding: 5px; background: #f8f9fa; border-radius: 3px;">
+                        Click buttons to test audio devices
+                    </div>
+                </div>
+
+                <div class="form-group">
                     <h4>Call History</h4>
                     <div id="callHistory"
                         style="max-height: 100px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 5px; padding: 10px;">
@@ -546,9 +555,24 @@
             </div>
         </div>
 
-        <div class="logs" id="logs">
-            <strong>📋 Activity Logs</strong><br>
-            Ready to start testing...<br>
+        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-top: 20px;">
+            <div class="logs" id="logs">
+                <strong>📋 Activity Logs</strong><br>
+                Ready to start testing...<br>
+            </div>
+            
+            <div style="background: #212529; color: #28a745; padding: 15px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 12px; height: 300px; overflow-y: auto;">
+                <strong>🔊 Audio Debug Info</strong><br>
+                <div id="audioDebugInfo">
+                    <div>Local Audio: <span id="localAudioStatus">Not initialized</span></div>
+                    <div>Remote Audio: <span id="remoteAudioStatus">Not connected</span></div>
+                    <div>Audio Elements: <span id="audioElementsStatus">Not created</span></div>
+                    <div>WebRTC Audio: <span id="webrtcAudioStatus">Not started</span></div>
+                    <br>
+                    <button onclick="refreshAudioDebug()" style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 3px; font-size: 11px; margin: 2px;">Refresh Debug</button>
+                    <button onclick="fixAudioIssues()" style="background: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 3px; font-size: 11px; margin: 2px;">Fix Audio</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -581,6 +605,10 @@
             <button class="video-control-btn video" id="videoVideoBtn" onclick="toggleVideoInCall()">📹</button>
         </div>
     </div>
+
+    <!-- Hidden audio elements for voice calls -->
+    <audio id="remoteAudio" autoplay style="display: none;"></audio>
+    <audio id="localAudioFeedback" muted style="display: none;"></audio>
 
     <script>
         let socket = null;
@@ -933,11 +961,35 @@
                 };
 
                 peerConnection.ontrack = (event) => {
-                    log('📺 Received remote track');
-                    const remoteVideo = document.getElementById('remoteVideo');
-                    if (remoteVideo.srcObject !== event.streams[0]) {
-                        remoteVideo.srcObject = event.streams[0];
+                    log(`📺 Received remote ${event.track.kind} track`);
+                    
+                    if (event.streams && event.streams[0]) {
                         remoteStream = event.streams[0];
+                        
+                        if (currentCall.callType === 'video') {
+                            const remoteVideo = document.getElementById('remoteVideo');
+                            if (remoteVideo.srcObject !== event.streams[0]) {
+                                remoteVideo.srcObject = event.streams[0];
+                                log('✅ Remote video stream attached');
+                            }
+                        } else {
+                            // For voice calls, create an audio element
+                            let remoteAudio = document.getElementById('remoteAudio');
+                            if (!remoteAudio) {
+                                remoteAudio = document.createElement('audio');
+                                remoteAudio.id = 'remoteAudio';
+                                remoteAudio.autoplay = true;
+                                remoteAudio.controls = false;
+                                remoteAudio.style.display = 'none';
+                                document.body.appendChild(remoteAudio);
+                                log('✅ Created remote audio element');
+                            }
+                            
+                            if (remoteAudio.srcObject !== event.streams[0]) {
+                                remoteAudio.srcObject = event.streams[0];
+                                log('✅ Remote audio stream attached');
+                            }
+                        }
                     }
                 };
 
@@ -949,6 +1001,9 @@
                     if (peerConnection.connectionState === 'connected') {
                         indicator.className = 'connection-status connected';
                         startCallDuration();
+                        
+                        // Test audio when connected
+                        testAudioConnection();
                     } else if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'disconnected') {
                         indicator.className = 'connection-status connecting';
                         log('⚠️ Connection lost or failed');
@@ -965,28 +1020,67 @@
                     document.getElementById('signalingState').textContent = peerConnection.signalingState;
                 };
 
-                // Get user media
+                // Get user media with enhanced audio constraints
                 const constraints = {
-                    audio: true,
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        sampleRate: 44100,
+                        channelCount: 2
+                    },
                     video: callType === 'video' ? {
                         width: { ideal: 1280 },
-                        height: { ideal: 720 }
+                        height: { ideal: 720 },
+                        frameRate: { ideal: 30 }
                     } : false
                 };
 
+                log(`🎯 Requesting media with constraints: ${JSON.stringify(constraints)}`);
+
                 localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                
+                // Verify we got the expected tracks
+                const audioTracks = localStream.getAudioTracks();
+                const videoTracks = localStream.getVideoTracks();
+                
+                if (audioTracks.length === 0) {
+                    throw new Error('No audio track obtained from getUserMedia');
+                }
+                
+                if (callType === 'video' && videoTracks.length === 0) {
+                    log('⚠️ No video track obtained, falling back to audio only');
+                }
                 
                 // Add tracks to peer connection
                 localStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, localStream);
-                    log(`➕ Added ${track.kind} track to peer connection`);
+                    const sender = peerConnection.addTrack(track, localStream);
+                    log(`➕ Added ${track.kind} track to peer connection: ${track.label}`);
+                    log(`   Track settings: ${JSON.stringify(track.getSettings())}`);
                 });
 
-                // Display local video
+                // Display local media
                 if (callType === 'video') {
                     const localVideo = document.getElementById('localVideo');
                     localVideo.srcObject = localStream;
+                    log('✅ Local video stream attached');
+                } else {
+                    // For voice calls, we still need to handle local audio feedback
+                    log('✅ Local audio stream initialized (no visual element needed)');
                 }
+                
+                // Test audio tracks
+                const audioTracks = localStream.getAudioTracks();
+                const videoTracks = localStream.getVideoTracks();
+                log(`📊 Local stream: ${audioTracks.length} audio tracks, ${videoTracks.length} video tracks`);
+                
+                audioTracks.forEach((track, index) => {
+                    log(`🎤 Audio track ${index}: ${track.label}, enabled: ${track.enabled}`);
+                });
+                
+                videoTracks.forEach((track, index) => {
+                    log(`📹 Video track ${index}: ${track.label}, enabled: ${track.enabled}`);
+                });
 
                 log('✅ Peer connection initialized successfully');
                 return true;
@@ -1003,7 +1097,14 @@
                 if (!initialized) return;
 
                 log('📝 Creating offer...');
-                const offer = await peerConnection.createOffer();
+                
+                // Create offer with proper constraints for audio
+                const offerOptions = {
+                    offerToReceiveAudio: true,
+                    offerToReceiveVideo: callType === 'video'
+                };
+                
+                const offer = await peerConnection.createOffer(offerOptions);
                 await peerConnection.setLocalDescription(offer);
 
                 const targetUserId = currentCall.receiverId || currentCall.receiver?.id;
@@ -1077,7 +1178,12 @@
                     log('✅ Remote description set, now creating answer...');
 
                     // Now create the answer
-                    const answer = await peerConnection.createAnswer();
+                    const answerOptions = {
+                        offerToReceiveAudio: true,
+                        offerToReceiveVideo: currentCall.callType === 'video'
+                    };
+                    
+                    const answer = await peerConnection.createAnswer(answerOptions);
                     await peerConnection.setLocalDescription(answer);
 
                     const targetUserId = signalData.fromUserId;
@@ -1148,6 +1254,56 @@
             callStartTime = null;
         }
 
+        function testAudioConnection() {
+            log('🔊 Testing audio connection...');
+            
+            // Test local audio
+            if (localStream) {
+                const audioTracks = localStream.getAudioTracks();
+                audioTracks.forEach((track, index) => {
+                    log(`🎤 Local audio track ${index}: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`);
+                });
+            }
+            
+            // Test remote audio
+            if (remoteStream) {
+                const audioTracks = remoteStream.getAudioTracks();
+                audioTracks.forEach((track, index) => {
+                    log(`🔊 Remote audio track ${index}: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`);
+                });
+                
+                // Ensure remote audio element is properly configured
+                const remoteAudio = document.getElementById('remoteAudio');
+                if (remoteAudio && currentCall.callType === 'voice') {
+                    remoteAudio.volume = 1.0;
+                    remoteAudio.muted = false;
+                    
+                    // Force play if paused
+                    if (remoteAudio.paused) {
+                        remoteAudio.play().catch(e => log(`⚠️ Could not play remote audio: ${e.message}`));
+                    }
+                    
+                    log(`🔊 Remote audio element: volume=${remoteAudio.volume}, muted=${remoteAudio.muted}, paused=${remoteAudio.paused}`);
+                }
+                
+                const remoteVideo = document.getElementById('remoteVideo');
+                if (remoteVideo && currentCall.callType === 'video') {
+                    remoteVideo.volume = 1.0;
+                    remoteVideo.muted = false;
+                    
+                    // Force play if paused
+                    if (remoteVideo.paused) {
+                        remoteVideo.play().catch(e => log(`⚠️ Could not play remote video: ${e.message}`));
+                    }
+                    
+                    log(`📺 Remote video element: volume=${remoteVideo.volume}, muted=${remoteVideo.muted}, paused=${remoteVideo.paused}`);
+                }
+            }
+            
+            // Update debug panel
+            refreshAudioDebug();
+        }
+
         function closeVideoCall() {
             // Stop all tracks
             if (localStream) {
@@ -1173,8 +1329,13 @@
             // Reset video elements
             const localVideo = document.getElementById('localVideo');
             const remoteVideo = document.getElementById('remoteVideo');
+            const remoteAudio = document.getElementById('remoteAudio');
+            
             localVideo.srcObject = null;
             remoteVideo.srcObject = null;
+            if (remoteAudio) {
+                remoteAudio.srcObject = null;
+            }
 
             // Hide video overlay
             document.getElementById('videoCallOverlay').classList.remove('active');
@@ -1680,14 +1841,199 @@
             historyEl.insertBefore(callEl, historyEl.firstChild);
         }
 
+        // Audio fix function
+        function fixAudioIssues() {
+            log('🔧 Attempting to fix audio issues...');
+            
+            try {
+                // Fix remote audio element
+                const remoteAudio = document.getElementById('remoteAudio');
+                if (remoteAudio && remoteStream) {
+                    remoteAudio.srcObject = remoteStream;
+                    remoteAudio.volume = 1.0;
+                    remoteAudio.muted = false;
+                    remoteAudio.autoplay = true;
+                    
+                    remoteAudio.play().then(() => {
+                        log('✅ Remote audio element fixed and playing');
+                    }).catch(e => {
+                        log(`⚠️ Could not play remote audio: ${e.message}`);
+                    });
+                }
+                
+                // Fix remote video element
+                const remoteVideo = document.getElementById('remoteVideo');
+                if (remoteVideo && remoteStream) {
+                    remoteVideo.srcObject = remoteStream;
+                    remoteVideo.volume = 1.0;
+                    remoteVideo.muted = false;
+                    remoteVideo.autoplay = true;
+                    
+                    remoteVideo.play().then(() => {
+                        log('✅ Remote video element fixed and playing');
+                    }).catch(e => {
+                        log(`⚠️ Could not play remote video: ${e.message}`);
+                    });
+                }
+                
+                // Unmute all audio tracks
+                if (remoteStream) {
+                    remoteStream.getAudioTracks().forEach(track => {
+                        track.enabled = true;
+                        log(`🔊 Enabled remote audio track: ${track.label}`);
+                    });
+                }
+                
+                if (localStream) {
+                    localStream.getAudioTracks().forEach(track => {
+                        if (track.muted) {
+                            track.enabled = true;
+                            log(`🎤 Enabled local audio track: ${track.label}`);
+                        }
+                    });
+                }
+                
+                refreshAudioDebug();
+                log('✅ Audio fix attempt completed');
+                
+            } catch (error) {
+                log(`❌ Error fixing audio: ${error.message}`);
+            }
+        }
+
+        // Audio debugging function
+        function refreshAudioDebug() {
+            const localAudioStatus = document.getElementById('localAudioStatus');
+            const remoteAudioStatus = document.getElementById('remoteAudioStatus');
+            const audioElementsStatus = document.getElementById('audioElementsStatus');
+            const webrtcAudioStatus = document.getElementById('webrtcAudioStatus');
+            
+            // Check local audio
+            if (localStream) {
+                const audioTracks = localStream.getAudioTracks();
+                if (audioTracks.length > 0) {
+                    const track = audioTracks[0];
+                    localAudioStatus.innerHTML = `✅ Active<br>&nbsp;&nbsp;Label: ${track.label}<br>&nbsp;&nbsp;Enabled: ${track.enabled}<br>&nbsp;&nbsp;Muted: ${track.muted}`;
+                } else {
+                    localAudioStatus.textContent = '❌ No audio tracks';
+                }
+            } else {
+                localAudioStatus.textContent = '❌ No local stream';
+            }
+            
+            // Check remote audio
+            if (remoteStream) {
+                const audioTracks = remoteStream.getAudioTracks();
+                if (audioTracks.length > 0) {
+                    const track = audioTracks[0];
+                    remoteAudioStatus.innerHTML = `✅ Connected<br>&nbsp;&nbsp;Label: ${track.label}<br>&nbsp;&nbsp;Enabled: ${track.enabled}<br>&nbsp;&nbsp;Muted: ${track.muted}`;
+                } else {
+                    remoteAudioStatus.textContent = '❌ No remote audio tracks';
+                }
+            } else {
+                remoteAudioStatus.textContent = '❌ No remote stream';
+            }
+            
+            // Check audio elements
+            const remoteAudio = document.getElementById('remoteAudio');
+            const remoteVideo = document.getElementById('remoteVideo');
+            
+            let elementsInfo = '';
+            if (remoteAudio) {
+                elementsInfo += `Audio: vol=${remoteAudio.volume}, muted=${remoteAudio.muted}<br>`;
+            }
+            if (remoteVideo) {
+                elementsInfo += `Video: vol=${remoteVideo.volume}, muted=${remoteVideo.muted}`;
+            }
+            audioElementsStatus.innerHTML = elementsInfo || 'No elements found';
+            
+            // Check WebRTC status
+            if (peerConnection) {
+                webrtcAudioStatus.innerHTML = `✅ Active<br>&nbsp;&nbsp;State: ${peerConnection.connectionState}<br>&nbsp;&nbsp;ICE: ${peerConnection.iceConnectionState}`;
+            } else {
+                webrtcAudioStatus.textContent = '❌ No peer connection';
+            }
+        }
+
+        // Audio testing functions
+        async function testMicrophone() {
+            try {
+                log('🎤 Testing microphone...');
+                const testResult = document.getElementById('audioTestResult');
+                testResult.textContent = 'Testing microphone...';
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    } 
+                });
+                
+                const audioTracks = stream.getAudioTracks();
+                if (audioTracks.length > 0) {
+                    const track = audioTracks[0];
+                    testResult.innerHTML = `✅ Microphone working<br>Device: ${track.label}<br>Enabled: ${track.enabled}`;
+                    log(`✅ Microphone test passed: ${track.label}`);
+                    
+                    // Stop the test stream
+                    setTimeout(() => {
+                        stream.getTracks().forEach(track => track.stop());
+                    }, 2000);
+                } else {
+                    testResult.textContent = '❌ No microphone found';
+                    log('❌ No microphone tracks found');
+                }
+            } catch (error) {
+                const testResult = document.getElementById('audioTestResult');
+                testResult.textContent = `❌ Microphone test failed: ${error.message}`;
+                log(`❌ Microphone test failed: ${error.message}`);
+            }
+        }
+
+        async function testSpeakers() {
+            try {
+                log('🔊 Testing speakers...');
+                const testResult = document.getElementById('audioTestResult');
+                testResult.textContent = 'Testing speakers...';
+                
+                // Create a test audio element
+                const audio = new Audio();
+                audio.src = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT';
+                
+                audio.volume = 0.1; // Low volume for test
+                
+                const playPromise = audio.play();
+                if (playPromise !== undefined) {
+                    playPromise.then(() => {
+                        testResult.textContent = '✅ Speakers working - you should hear a brief tone';
+                        log('✅ Speaker test: audio playing');
+                        
+                        setTimeout(() => {
+                            audio.pause();
+                            audio.currentTime = 0;
+                        }, 1000);
+                    }).catch(error => {
+                        testResult.textContent = `❌ Speaker test failed: ${error.message}`;
+                        log(`❌ Speaker test failed: ${error.message}`);
+                    });
+                }
+            } catch (error) {
+                const testResult = document.getElementById('audioTestResult');
+                testResult.textContent = `❌ Speaker test failed: ${error.message}`;
+                log(`❌ Speaker test failed: ${error.message}`);
+            }
+        }
+
         // Initialize
         log('🚀 Chat App WebRTC Calling Test Interface loaded');
         log('📋 Instructions:');
         log('1. Login or Register with credentials');
         log('2. Connect to Socket.IO server');
-        log('3. Search and select a user');
-        log('4. Start voice or video calls');
-        log('5. Test chat messaging');
+        log('3. Test your audio devices using the Audio Test buttons');
+        log('4. Search and select a user');
+        log('5. Start voice or video calls');
+        log('6. Test chat messaging');
         log('💡 WebRTC will request camera/microphone permissions when you make a call');
     </script>
 </body>
