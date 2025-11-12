@@ -822,38 +822,69 @@
             });
 
             socket.on('call_answered', async (callData) => {
-                log(`✅ Call answered by ${callData.receiver.username}`);
-                currentCall = callData;
+                log(`✅ Call answered by receiver`);
+                currentCall = { ...currentCall, ...callData };
+                
+                updateCallStatus('connected', 'Call connected');
+                showCallControls(true);
                 
                 // Show video overlay if video call and we are the caller
-                if (callData.callType === 'video' && callData.callerId === currentUser.id) {
+                if (currentCall.callType === 'video' && currentCall.callerId === currentUser.id) {
                     document.getElementById('videoCallOverlay').classList.add('active');
-                    const participantName = callData.receiver.username || 'User';
+                    const participantName = users.find(u => u.id === currentCall.receiverId)?.username || 'User';
                     document.getElementById('callParticipant').textContent = participantName;
                 }
                 
                 // Create offer if we initiated the call
-                if (callData.callerId === currentUser.id) {
-                    await createOffer(callData.callType);
+                if (currentCall.callerId === currentUser.id) {
+                    await createOffer(currentCall.callType);
                 }
             });
 
+            socket.on('call_initiated', (callData) => {
+                log(`📞 Call initiated successfully`);
+                currentCall = { ...currentCall, ...callData };
+                updateCallStatus('calling', 'Ringing...');
+            });
+
+            socket.on('call_connected', async (callData) => {
+                log(`✅ Call connected`);
+                updateCallStatus('connected', 'Call connected');
+                showCallControls(true);
+            });
+
             socket.on('call_declined', (callData) => {
-                log(`❌ Call declined by ${callData.receiver.username}`);
+                log(`❌ Call declined`);
                 updateCallStatus('', 'Call declined');
                 showCallControls(false);
                 closeVideoCall();
                 currentCall = null;
             });
 
+            socket.on('call_missed', (callData) => {
+                log(`📞 Call missed`);
+                updateCallStatus('', 'Call missed - no answer');
+                showCallControls(false);
+                closeVideoCall();
+                currentCall = null;
+            });
+
             socket.on('call_ended', (callData) => {
-                log(`📞 Call ended. Duration: ${callData.duration || 'Unknown'}`);
+                log(`📞 Call ended. Reason: ${callData.reason || 'Unknown'}`);
                 updateCallStatus('', 'Call ended');
                 showCallControls(false);
                 hideIncomingCall();
                 closeVideoCall();
+                
+                if (currentCall) {
+                    addToCallHistory({
+                        ...currentCall,
+                        endReason: callData.reason,
+                        endedBy: callData.endedBy
+                    });
+                }
+                
                 currentCall = null;
-                addToCallHistory(callData);
             });
 
             socket.on('call_signal', async (signalData) => {
@@ -864,6 +895,14 @@
             socket.on('user_status_changed', (data) => {
                 log(`👤 ${data.username} is now ${data.isOnline ? 'online' : 'offline'}`);
                 updateUserStatus(data.userId, data.isOnline);
+            });
+
+            socket.on('call_error', (error) => {
+                log(`❌ Call error: ${error.message}`);
+                updateCallStatus('', `Call failed: ${error.message}`);
+                showCallControls(false);
+                closeVideoCall();
+                currentCall = null;
             });
 
             socket.on('error', (error) => {
@@ -879,10 +918,12 @@
                 
                 // Set up event handlers
                 peerConnection.onicecandidate = (event) => {
-                    if (event.candidate) {
+                    if (event.candidate && currentCall) {
                         log('🧊 Sending ICE candidate');
+                        const targetUserId = currentCall.callerId === currentUser.id ? currentCall.receiverId : currentCall.callerId;
                         socket.emit('call_signal', {
-                            callId: currentCall.callId,
+                            callId: currentCall.callId || currentCall.id,
+                            targetUserId: targetUserId,
                             signal: {
                                 type: 'ice-candidate',
                                 candidate: event.candidate
@@ -965,8 +1006,10 @@
                 const offer = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offer);
 
+                const targetUserId = currentCall.receiverId || currentCall.receiver?.id;
                 socket.emit('call_signal', {
-                    callId: currentCall.callId,
+                    callId: currentCall.callId || currentCall.id,
+                    targetUserId: targetUserId,
                     signal: {
                         type: 'offer',
                         sdp: offer.sdp
@@ -991,8 +1034,10 @@
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
 
+                const targetUserId = currentCall.callerId || currentCall.caller?.id;
                 socket.emit('call_signal', {
-                    callId: currentCall.callId,
+                    callId: currentCall.callId || currentCall.id,
+                    targetUserId: targetUserId,
                     signal: {
                         type: 'answer',
                         sdp: answer.sdp
@@ -1007,7 +1052,9 @@
 
         async function handleSignaling(signalData) {
             try {
-                if (signalData.type === 'offer') {
+                const signal = signalData.signal;
+                
+                if (signal.type === 'offer') {
                     log('📥 Received offer, setting remote description...');
                     
                     // Initialize peer connection if not already done
@@ -1023,7 +1070,7 @@
                     await peerConnection.setRemoteDescription(
                         new RTCSessionDescription({
                             type: 'offer',
-                            sdp: signalData.sdp
+                            sdp: signal.sdp
                         })
                     );
                     
@@ -1033,8 +1080,10 @@
                     const answer = await peerConnection.createAnswer();
                     await peerConnection.setLocalDescription(answer);
 
+                    const targetUserId = signalData.fromUserId;
                     socket.emit('call_signal', {
-                        callId: currentCall.callId,
+                        callId: currentCall.callId || currentCall.id,
+                        targetUserId: targetUserId,
                         signal: {
                             type: 'answer',
                             sdp: answer.sdp
@@ -1043,7 +1092,7 @@
 
                     log('✅ Answer created and sent');
                     
-                } else if (signalData.type === 'answer') {
+                } else if (signal.type === 'answer') {
                     log('📥 Received answer, setting remote description...');
                     
                     if (!peerConnection) {
@@ -1054,19 +1103,19 @@
                     await peerConnection.setRemoteDescription(
                         new RTCSessionDescription({
                             type: 'answer',
-                            sdp: signalData.sdp
+                            sdp: signal.sdp
                         })
                     );
                     
                     log('✅ Remote description set successfully');
                     
-                } else if (signalData.type === 'ice-candidate') {
+                } else if (signal.type === 'ice-candidate') {
                     log('📥 Received ICE candidate');
                     
-                    if (peerConnection && peerConnection.remoteDescription && signalData.candidate) {
+                    if (peerConnection && peerConnection.remoteDescription && signal.candidate) {
                         try {
                             await peerConnection.addIceCandidate(
-                                new RTCIceCandidate(signalData.candidate)
+                                new RTCIceCandidate(signal.candidate)
                             );
                             log('✅ ICE candidate added');
                         } catch (e) {
@@ -1415,7 +1464,7 @@
 
         // Calling functions
         function initiateVoiceCall() {
-            if (!socket) {
+            if (!socket || !socket.connected) {
                 log('❌ Please connect to socket first');
                 return;
             }
@@ -1433,9 +1482,10 @@
             socket.emit('initiate_call', callData);
             log(`📞 Initiating voice call to user ${selectedUserId}`);
 
+            // Store temporary call data
             currentCall = {
                 ...callData,
-                callId: Date.now().toString(),
+                callerId: currentUser.id,
                 status: 'calling'
             };
 
@@ -1443,7 +1493,7 @@
         }
 
         function initiateVideoCall() {
-            if (!socket) {
+            if (!socket || !socket.connected) {
                 log('❌ Please connect to socket first');
                 return;
             }
@@ -1461,9 +1511,10 @@
             socket.emit('initiate_call', callData);
             log(`📹 Initiating video call to user ${selectedUserId}`);
 
+            // Store temporary call data
             currentCall = {
                 ...callData,
-                callId: Date.now().toString(),
+                callerId: currentUser.id,
                 status: 'calling'
             };
 
@@ -1478,11 +1529,12 @@
         async function answerCall() {
             if (!currentCall || !socket) return;
 
-            socket.emit('answer_call', { callId: currentCall.callId });
-            log(`✅ Answering call ${currentCall.callId}`);
+            const callId = currentCall.callId || currentCall.id;
+            socket.emit('answer_call', { callId: callId });
+            log(`✅ Answering call ${callId}`);
 
             hideIncomingCall();
-            updateCallStatus('connected', 'Call connected');
+            updateCallStatus('connecting', 'Connecting...');
             showCallControls(true);
 
             // Show video overlay if video call
@@ -1498,8 +1550,9 @@
         function declineCall() {
             if (!currentCall || !socket) return;
 
-            socket.emit('decline_call', { callId: currentCall.callId });
-            log(`❌ Declining call ${currentCall.callId}`);
+            const callId = currentCall.callId || currentCall.id;
+            socket.emit('decline_call', { callId: callId });
+            log(`❌ Declining call ${callId}`);
 
             hideIncomingCall();
             currentCall = null;
@@ -1508,8 +1561,9 @@
         function endCall() {
             if (!currentCall || !socket) return;
 
-            socket.emit('end_call', { callId: currentCall.callId });
-            log(`📞 Ending call ${currentCall.callId}`);
+            const callId = currentCall.callId || currentCall.id;
+            socket.emit('end_call', { callId: callId });
+            log(`📞 Ending call ${callId}`);
 
             updateCallStatus('', 'Call ended');
             showCallControls(false);
@@ -1587,7 +1641,7 @@
             currentCall = callData;
 
             document.getElementById('callerName').textContent = callData.caller.username;
-            document.getElementById('callType').textContent = `${callData.callType} Call`;
+            document.getElementById('callType').textContent = `${callData.callType.charAt(0).toUpperCase() + callData.callType.slice(1)} Call`;
             document.getElementById('callerAvatar').textContent = callData.caller.username.charAt(0).toUpperCase();
 
             document.getElementById('incomingCall').classList.add('show');
@@ -1603,13 +1657,24 @@
             callEl.style.cssText = 'padding: 5px; border-bottom: 1px solid #eee; font-size: 12px;';
 
             const timestamp = new Date().toLocaleTimeString();
-            const duration = callData.duration || 'Unknown';
             const type = callData.callType || 'voice';
-            const participant = callData.caller?.username || callData.receiver?.username || 'Unknown';
+            
+            // Determine participant name
+            let participant = 'Unknown';
+            if (callData.callerId === currentUser.id) {
+                // We were the caller
+                participant = users.find(u => u.id === callData.receiverId)?.username || 'Unknown';
+            } else {
+                // We were the receiver
+                participant = callData.caller?.username || users.find(u => u.id === callData.callerId)?.username || 'Unknown';
+            }
+
+            const status = callData.endReason || 'completed';
+            const statusIcon = status === 'declined' ? '❌' : status === 'missed' ? '📞' : '✅';
 
             callEl.innerHTML = `
-                <strong>${type} call</strong> with ${participant}<br>
-                <small>Duration: ${duration} | ${timestamp}</small>
+                <strong>${statusIcon} ${type} call</strong> with ${participant}<br>
+                <small>Status: ${status} | ${timestamp}</small>
             `;
 
             historyEl.insertBefore(callEl, historyEl.firstChild);
