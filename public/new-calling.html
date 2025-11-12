@@ -311,6 +311,7 @@
             max-height: 80vh;
             background: #000;
             border-radius: 10px;
+            object-fit: contain;
         }
 
         #localVideo {
@@ -323,6 +324,7 @@
             border-radius: 10px;
             border: 3px solid white;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            object-fit: cover;
         }
 
         .video-controls {
@@ -572,7 +574,7 @@
             <div id="callDuration">00:00</div>
         </div>
         <div class="video-container">
-            <video id="remoteVideo" autoplay playsinline></video>
+            <video id="remoteVideo" autoplay playsinline controls></video>
             <video id="localVideo" autoplay playsinline muted></video>
         </div>
         <div class="video-controls">
@@ -892,11 +894,29 @@
                 };
 
                 peerConnection.ontrack = (event) => {
-                    log('📺 Received remote track');
+                    log(`📺 Received remote ${event.track.kind} track`);
                     const remoteVideo = document.getElementById('remoteVideo');
-                    if (remoteVideo.srcObject !== event.streams[0]) {
+                    
+                    if (!remoteVideo.srcObject) {
                         remoteVideo.srcObject = event.streams[0];
                         remoteStream = event.streams[0];
+                        
+                        // Ensure audio plays
+                        remoteVideo.play().catch(e => {
+                            log(`⚠️ Auto-play blocked: ${e.message}. User interaction may be required.`);
+                        });
+                        
+                        log(`✅ Set remote stream with ${event.streams[0].getTracks().length} tracks`);
+                        event.streams[0].getTracks().forEach(track => {
+                            log(`   - ${track.kind} track (${track.enabled ? 'enabled' : 'disabled'})`);
+                        });
+                        
+                        // Update UI when remote stream is received
+                        if (currentCall) {
+                            const participantName = currentCall.caller?.username || currentCall.receiver?.username || 'User';
+                            document.getElementById('callParticipant').textContent = participantName;
+                            updateCallStatus('connected', `Connected with ${participantName}`);
+                        }
                     }
                 };
 
@@ -945,9 +965,13 @@
                 if (callType === 'video') {
                     const localVideo = document.getElementById('localVideo');
                     localVideo.srcObject = localStream;
+                    log('📹 Local video displayed');
+                } else {
+                    log('🎤 Audio-only call - no local video');
                 }
 
                 log('✅ Peer connection initialized successfully');
+                log(`📊 Local stream tracks: ${localStream.getTracks().map(t => t.kind).join(', ')}`);
                 return true;
             } catch (error) {
                 log(`❌ Error initializing peer connection: ${error.message}`);
@@ -1012,6 +1036,7 @@
                     
                     // Initialize peer connection if not already done
                     if (!peerConnection) {
+                        log('🔧 Initializing peer connection for receiver...');
                         const initialized = await initializePeerConnection(currentCall.callType);
                         if (!initialized) {
                             log('❌ Failed to initialize peer connection');
@@ -1042,6 +1067,7 @@
                     });
 
                     log('✅ Answer created and sent');
+                    log(`📊 Local tracks: ${localStream?.getTracks().length || 0} tracks sent`);
                     
                 } else if (signalData.type === 'answer') {
                     log('📥 Received answer, setting remote description...');
@@ -1059,6 +1085,7 @@
                     );
                     
                     log('✅ Remote description set successfully');
+                    log('⏳ Waiting for remote tracks...');
                     
                 } else if (signalData.type === 'ice-candidate') {
                     log('📥 Received ICE candidate');
@@ -1078,6 +1105,7 @@
                 }
             } catch (error) {
                 log(`❌ Error handling signaling: ${error.message}`);
+                console.error('Signaling error:', error);
             }
         }
 
@@ -1478,21 +1506,23 @@
         async function answerCall() {
             if (!currentCall || !socket) return;
 
-            socket.emit('answer_call', { callId: currentCall.callId });
-            log(`✅ Answering call ${currentCall.callId}`);
+            log(`✅ Answering ${currentCall.callType} call ${currentCall.callId}`);
 
             hideIncomingCall();
-            updateCallStatus('connected', 'Call connected');
+            updateCallStatus('connected', 'Connecting...');
             showCallControls(true);
 
             // Show video overlay if video call
             if (currentCall.callType === 'video') {
                 document.getElementById('videoCallOverlay').classList.add('active');
-                document.getElementById('callParticipant').textContent = currentCall.caller.username;
+                document.getElementById('callParticipant').textContent = `Connecting to ${currentCall.caller.username}...`;
             }
 
-            // Initialize peer connection (answer will be created when offer is received)
-            await initializePeerConnection(currentCall.callType);
+            // Send answer acceptance to server
+            socket.emit('answer_call', { callId: currentCall.callId });
+
+            // Note: Peer connection will be initialized when we receive the offer
+            log('⏳ Waiting for offer from caller...');
         }
 
         function declineCall() {
