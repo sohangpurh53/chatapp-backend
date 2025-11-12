@@ -825,6 +825,13 @@
                 log(`✅ Call answered by ${callData.receiver.username}`);
                 currentCall = callData;
                 
+                // Show video overlay if video call and we are the caller
+                if (callData.callType === 'video' && callData.callerId === currentUser.id) {
+                    document.getElementById('videoCallOverlay').classList.add('active');
+                    const participantName = callData.receiver.username || 'User';
+                    document.getElementById('callParticipant').textContent = participantName;
+                }
+                
                 // Create offer if we initiated the call
                 if (callData.callerId === currentUser.id) {
                     await createOffer(callData.callType);
@@ -974,8 +981,11 @@
 
         async function createAnswer(callType) {
             try {
-                const initialized = await initializePeerConnection(callType);
-                if (!initialized) return;
+                // Only initialize if not already done
+                if (!peerConnection) {
+                    const initialized = await initializePeerConnection(callType);
+                    if (!initialized) return;
+                }
 
                 log('📝 Creating answer...');
                 const answer = await peerConnection.createAnswer();
@@ -998,23 +1008,48 @@
         async function handleSignaling(signalData) {
             try {
                 if (signalData.type === 'offer') {
-                    log('📥 Received offer, creating answer...');
+                    log('📥 Received offer, setting remote description...');
                     
+                    // Initialize peer connection if not already done
                     if (!peerConnection) {
-                        await initializePeerConnection(currentCall.callType);
+                        const initialized = await initializePeerConnection(currentCall.callType);
+                        if (!initialized) {
+                            log('❌ Failed to initialize peer connection');
+                            return;
+                        }
                     }
 
+                    // Set remote description first
                     await peerConnection.setRemoteDescription(
                         new RTCSessionDescription({
                             type: 'offer',
                             sdp: signalData.sdp
                         })
                     );
+                    
+                    log('✅ Remote description set, now creating answer...');
 
-                    await createAnswer(currentCall.callType);
+                    // Now create the answer
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+
+                    socket.emit('call_signal', {
+                        callId: currentCall.callId,
+                        signal: {
+                            type: 'answer',
+                            sdp: answer.sdp
+                        }
+                    });
+
+                    log('✅ Answer created and sent');
                     
                 } else if (signalData.type === 'answer') {
-                    log('📥 Received answer');
+                    log('📥 Received answer, setting remote description...');
+                    
+                    if (!peerConnection) {
+                        log('❌ No peer connection available');
+                        return;
+                    }
                     
                     await peerConnection.setRemoteDescription(
                         new RTCSessionDescription({
@@ -1023,13 +1058,22 @@
                         })
                     );
                     
+                    log('✅ Remote description set successfully');
+                    
                 } else if (signalData.type === 'ice-candidate') {
                     log('📥 Received ICE candidate');
                     
-                    if (peerConnection && signalData.candidate) {
-                        await peerConnection.addIceCandidate(
-                            new RTCIceCandidate(signalData.candidate)
-                        );
+                    if (peerConnection && peerConnection.remoteDescription && signalData.candidate) {
+                        try {
+                            await peerConnection.addIceCandidate(
+                                new RTCIceCandidate(signalData.candidate)
+                            );
+                            log('✅ ICE candidate added');
+                        } catch (e) {
+                            log(`⚠️ Error adding ICE candidate: ${e.message}`);
+                        }
+                    } else {
+                        log('⚠️ Cannot add ICE candidate - no remote description yet');
                     }
                 }
             } catch (error) {
@@ -1447,8 +1491,8 @@
                 document.getElementById('callParticipant').textContent = currentCall.caller.username;
             }
 
-            // Initialize peer connection and create answer
-            await createAnswer(currentCall.callType);
+            // Initialize peer connection (answer will be created when offer is received)
+            await initializePeerConnection(currentCall.callType);
         }
 
         function declineCall() {
