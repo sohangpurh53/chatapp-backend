@@ -1,0 +1,1586 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat App - WebRTC Calling Test Interface</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            padding: 20px;
+            min-height: 600px;
+        }
+
+        .panel {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            border: 1px solid #e9ecef;
+        }
+
+        .panel h3 {
+            color: #495057;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #007bff;
+        }
+
+        .auth-section {
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        input,
+        select,
+        button {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ced4da;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+        }
+
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .call-button {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            margin: 5px 0;
+        }
+
+        .video-call-button {
+            background: linear-gradient(135deg, #007bff 0%, #6610f2 100%);
+        }
+
+        .end-call-button {
+            background: linear-gradient(135deg, #dc3545 0%, #fd7e14 100%);
+        }
+
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-weight: 600;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status.calling {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
+        .user-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+
+        .user-item {
+            padding: 10px;
+            border-bottom: 1px solid #dee2e6;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .user-item:hover {
+            background-color: #e9ecef;
+        }
+
+        .user-item.selected {
+            background-color: #007bff;
+            color: white;
+        }
+
+        .chat-messages {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+            background: white;
+        }
+
+        .message {
+            margin-bottom: 10px;
+            padding: 8px;
+            border-radius: 5px;
+            background: #f8f9fa;
+        }
+
+        .message.own {
+            background: #007bff;
+            color: white;
+            margin-left: 20px;
+        }
+
+        .message.other {
+            background: #e9ecef;
+            margin-right: 20px;
+        }
+
+        .logs {
+            height: 300px;
+            overflow-y: auto;
+            background: #212529;
+            color: #28a745;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+
+        .call-controls {
+            display: none;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .call-controls.active {
+            display: grid;
+        }
+
+        .incoming-call {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+            text-align: center;
+            min-width: 300px;
+        }
+
+        .incoming-call.show {
+            display: block;
+        }
+
+        .caller-info {
+            margin-bottom: 20px;
+        }
+
+        .caller-avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            margin: 0 auto 10px;
+        }
+
+        .call-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+
+        .answer-btn {
+            background: #28a745;
+            border: none;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .decline-btn {
+            background: #dc3545;
+            border: none;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        /* Video call interface */
+        .video-call-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            z-index: 2000;
+        }
+
+        .video-call-overlay.active {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .video-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        #remoteVideo {
+            width: 100%;
+            max-width: 1200px;
+            height: auto;
+            max-height: 80vh;
+            background: #000;
+            border-radius: 10px;
+        }
+
+        #localVideo {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            width: 250px;
+            height: 180px;
+            background: #000;
+            border-radius: 10px;
+            border: 3px solid white;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .video-controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.5);
+        }
+
+        .video-control-btn {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .video-control-btn:hover {
+            transform: scale(1.1);
+        }
+
+        .video-control-btn.mute {
+            background: #28a745;
+        }
+
+        .video-control-btn.mute.active {
+            background: #dc3545;
+        }
+
+        .video-control-btn.video {
+            background: #007bff;
+        }
+
+        .video-control-btn.video.active {
+            background: #6c757d;
+        }
+
+        .video-control-btn.end {
+            background: #dc3545;
+            width: 70px;
+            height: 70px;
+        }
+
+        .call-info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 15px;
+            border-radius: 10px;
+        }
+
+        .connection-status {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .connection-status.connected {
+            background: #28a745;
+        }
+
+        .connection-status.connecting {
+            background: #ffc107;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+
+            #localVideo {
+                width: 150px;
+                height: 110px;
+                bottom: 20px;
+                right: 20px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📞 Chat App - WebRTC Calling Test Interface</h1>
+            <p>Test voice calls, video calls, user search, and real-time chat with WebRTC</p>
+        </div>
+
+        <div class="main-content">
+            <!-- Authentication & Connection Panel -->
+            <div class="panel">
+                <h3>🔐 Authentication & Connection</h3>
+
+                <div class="auth-section">
+                    <div class="form-group">
+                        <label>Email:</label>
+                        <input type="email" id="email" value="test@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Password:</label>
+                        <input type="password" id="password" value="password123">
+                    </div>
+                    <div class="form-group">
+                        <label>Username (for registration):</label>
+                        <input type="text" id="username" value="testuser">
+                    </div>
+                    <button onclick="login()">Login</button>
+                    <button onclick="register()">Register</button>
+                    <button onclick="createTestUsers()" style="background: #17a2b8;">Create Test Users</button>
+                </div>
+
+                <div id="connectionStatus" class="status disconnected">
+                    Disconnected
+                </div>
+
+                <button onclick="connectSocket()" id="connectBtn" disabled>Connect to Socket</button>
+                <button onclick="disconnectSocket()" id="disconnectBtn" disabled>Disconnect</button>
+            </div>
+
+            <!-- User Search & Chat Panel -->
+            <div class="panel">
+                <h3>👥 Users & Chat</h3>
+
+                <div class="form-group">
+                    <label>Search Users:</label>
+                    <input type="text" id="searchInput" placeholder="Search by username or email (min 2 chars)"
+                        oninput="debounceSearch()">
+                    <div style="display: flex; gap: 5px; margin-top: 5px;">
+                        <button onclick="searchUsers()" style="flex: 1;">🔍 Search</button>
+                        <button onclick="loadAllUsers()" style="flex: 1; background: #28a745;">👥 Load All</button>
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <small style="color: #6c757d;">Quick search:</small><br>
+                        <div style="display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap;">
+                            <button onclick="quickSearch('alice')" style="font-size: 11px; padding: 5px;">alice</button>
+                            <button onclick="quickSearch('bob')" style="font-size: 11px; padding: 5px;">bob</button>
+                            <button onclick="quickSearch('test')" style="font-size: 11px; padding: 5px;">test</button>
+                            <button onclick="quickSearch('user')" style="font-size: 11px; padding: 5px;">user</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="userList" class="user-list">
+                    <!-- Users will be populated here -->
+                </div>
+
+                <div class="form-group">
+                    <label>Selected User:</label>
+                    <input type="text" id="selectedUser" readonly placeholder="Select a user to chat/call">
+                </div>
+
+                <div id="chatMessages" class="chat-messages">
+                    <!-- Chat messages will appear here -->
+                </div>
+
+                <div class="form-group">
+                    <input type="text" id="messageInput" placeholder="Type a message..."
+                        onkeypress="handleMessageKeyPress(event)">
+                    <button onclick="sendMessage()">Send Message</button>
+                </div>
+            </div>
+
+            <!-- Calling Panel -->
+            <div class="panel">
+                <h3>📞 Calling Features</h3>
+
+                <div id="callingInstructions" style="background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 12px;">
+                    <strong>📋 To make calls:</strong><br>
+                    1. Connect to Socket (left panel)<br>
+                    2. Search & select a user (above)<br>
+                    3. Click call buttons below
+                </div>
+
+                <div class="form-group">
+                    <button class="call-button" onclick="initiateVoiceCall()" id="voiceCallBtn" disabled>
+                        📞 Start Voice Call
+                    </button>
+                    <button class="video-call-button" onclick="initiateVideoCall()" id="videoCallBtn" disabled>
+                        📹 Start Video Call
+                    </button>
+                </div>
+
+                <div id="callStatus" class="status" style="display: none;">
+                    No active call
+                </div>
+
+                <div id="callControls" class="call-controls">
+                    <button onclick="toggleAudio()" id="audioBtn">🔇 Mute</button>
+                    <button onclick="toggleVideo()" id="videoBtn">📹 Video</button>
+                    <button class="end-call-button" onclick="endCall()">📞 End Call</button>
+                </div>
+
+                <div class="form-group">
+                    <h4>WebRTC Status</h4>
+                    <div id="webrtcStatus" style="padding: 10px; background: white; border-radius: 5px; font-size: 12px;">
+                        <div>Connection State: <span id="connectionState">New</span></div>
+                        <div>ICE State: <span id="iceState">New</span></div>
+                        <div>Signaling State: <span id="signalingState">Stable</span></div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <h4>Call History</h4>
+                    <div id="callHistory"
+                        style="max-height: 100px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 5px; padding: 10px;">
+                        <!-- Call history will appear here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="logs" id="logs">
+            <strong>📋 Activity Logs</strong><br>
+            Ready to start testing...<br>
+        </div>
+    </div>
+
+    <!-- Incoming Call Overlay -->
+    <div id="incomingCall" class="incoming-call">
+        <div class="caller-info">
+            <div class="caller-avatar" id="callerAvatar">?</div>
+            <h3 id="callerName">Unknown Caller</h3>
+            <p id="callType">Voice Call</p>
+        </div>
+        <div class="call-actions">
+            <button class="answer-btn" onclick="answerCall()">📞 Answer</button>
+            <button class="decline-btn" onclick="declineCall()">❌ Decline</button>
+        </div>
+    </div>
+
+    <!-- Video Call Overlay -->
+    <div id="videoCallOverlay" class="video-call-overlay">
+        <div class="call-info">
+            <h3><span class="connection-status connecting" id="connectionIndicator"></span><span id="callParticipant">Connecting...</span></h3>
+            <div id="callDuration">00:00</div>
+        </div>
+        <div class="video-container">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <video id="localVideo" autoplay playsinline muted></video>
+        </div>
+        <div class="video-controls">
+            <button class="video-control-btn mute" id="videoAudioBtn" onclick="toggleAudioInCall()">🎤</button>
+            <button class="video-control-btn end" onclick="endCall()">📞</button>
+            <button class="video-control-btn video" id="videoVideoBtn" onclick="toggleVideoInCall()">📹</button>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        let authToken = null;
+        let currentUser = null;
+        let selectedUserId = null;
+        let currentChatId = null;
+        let currentCall = null;
+        let users = [];
+        let searchTimeout = null;
+
+        // WebRTC variables
+        let peerConnection = null;
+        let localStream = null;
+        let remoteStream = null;
+        let isAudioMuted = false;
+        let isVideoMuted = false;
+        let callStartTime = null;
+        let callDurationInterval = null;
+
+        // ICE servers configuration
+        const iceServers = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' }
+            ]
+        };
+
+        function getBaseURL(fullUrl) {
+            const urlObj = new URL(fullUrl);
+            return `${urlObj.protocol}//${urlObj.host}`;
+        }
+        const url = window.location.href;
+        const baseUrl = getBaseURL(url);
+        console.log(baseUrl);
+
+        // Utility functions
+        function log(message) {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            logs.innerHTML += `[${timestamp}] ${message}<br>`;
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function updateConnectionStatus(status, message) {
+            const statusEl = document.getElementById('connectionStatus');
+            statusEl.className = `status ${status}`;
+            statusEl.textContent = message;
+        }
+
+        // Debounce search function
+        function debounceSearch() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                const query = document.getElementById('searchInput').value.trim();
+                if (query.length >= 2 || query.length === 0) {
+                    searchUsers();
+                }
+            }, 500);
+        }
+
+        // Create test users for easier testing
+        async function createTestUsers() {
+            const testUsers = [
+                { username: 'alice', email: 'alice@test.com', password: 'password123' },
+                { username: 'bob', email: 'bob@test.com', password: 'password123' },
+                { username: 'charlie', email: 'charlie@test.com', password: 'password123' },
+                { username: 'diana', email: 'diana@test.com', password: 'password123' },
+                { username: 'jamie', email: 'jamie@test.com', password: 'password123' }
+            ];
+
+            log('🔧 Creating test users...');
+            let created = 0;
+
+            for (const user of testUsers) {
+                try {
+                    const response = await fetch(baseUrl + '/api/auth/register', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(user)
+                    });
+
+                    if (response.ok) {
+                        created++;
+                        log(`✅ Created user: ${user.username}`);
+                    } else {
+                        const data = await response.json();
+                        if (data.message && data.message.includes('already exists')) {
+                            log(`ℹ️ User ${user.username} already exists`);
+                        } else {
+                            log(`⚠️ Failed to create ${user.username}: ${data.message}`);
+                        }
+                    }
+                } catch (error) {
+                    log(`❌ Error creating ${user.username}: ${error.message}`);
+                }
+            }
+
+            log(`🎉 Test user creation complete! ${created} new users created.`);
+            log('💡 You can now search for: alice, bob, charlie, diana, jamie');
+
+            setTimeout(() => {
+                document.getElementById('searchInput').value = 'test';
+                searchUsers();
+            }, 1000);
+        }
+
+        // Authentication functions
+        async function register() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const username = document.getElementById('username').value;
+
+            try {
+                const response = await fetch(baseUrl + '/api/auth/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password, username })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    authToken = data.token;
+                    currentUser = data.user;
+                    log(`✅ Registration successful: ${data.user.username}`);
+                    document.getElementById('connectBtn').disabled = false;
+                } else {
+                    log(`❌ Registration failed: ${data.message}`);
+                }
+            } catch (error) {
+                log(`❌ Registration error: ${error.message}`);
+            }
+        }
+
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch(baseUrl + '/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    authToken = data.token;
+                    currentUser = data.user;
+                    log(`✅ Login successful: ${data.user.username}`);
+                    document.getElementById('connectBtn').disabled = false;
+                } else {
+                    log(`❌ Login failed: ${data.message}`);
+                }
+            } catch (error) {
+                log(`❌ Login error: ${error.message}`);
+            }
+        }
+
+        // Socket connection functions
+        function connectSocket() {
+            if (!authToken) {
+                log('❌ Please login first');
+                return;
+            }
+
+            socket = io(baseUrl, {
+                auth: {
+                    token: authToken
+                },
+                transports: ['websocket', 'polling']
+            });
+
+            setupSocketListeners();
+
+            document.getElementById('connectBtn').disabled = true;
+            document.getElementById('disconnectBtn').disabled = false;
+        }
+
+        function disconnectSocket() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+            }
+
+            updateConnectionStatus('disconnected', 'Disconnected');
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('disconnectBtn').disabled = true;
+            document.getElementById('voiceCallBtn').disabled = true;
+            document.getElementById('videoCallBtn').disabled = true;
+        }
+
+        function setupSocketListeners() {
+            socket.on('connect', () => {
+                log(`✅ Connected to socket server. Socket ID: ${socket.id}`);
+                updateConnectionStatus('connected', `Connected as ${currentUser.username}`);
+                
+                if (selectedUserId) {
+                    document.getElementById('voiceCallBtn').disabled = false;
+                    document.getElementById('videoCallBtn').disabled = false;
+                    document.getElementById('callingInstructions').style.display = 'none';
+                }
+                
+                log('💡 Use "Create Test Users" button or search for users to start testing');
+            });
+
+            socket.on('connect_error', (error) => {
+                log(`❌ Connection error: ${error.message}`);
+                updateConnectionStatus('disconnected', 'Connection failed');
+            });
+
+            socket.on('disconnect', () => {
+                log('🔌 Disconnected from socket server');
+                updateConnectionStatus('disconnected', 'Disconnected');
+            });
+
+            socket.on('new_message', (message) => {
+                log(`📨 New message from ${message.sender.username}: ${message.content}`);
+                displayMessage(message);
+            });
+
+            socket.on('user_typing', (data) => {
+                log(`⌨️ ${data.username} is typing...`);
+            });
+
+            socket.on('incoming_call', async (callData) => {
+                log(`📞 Incoming ${callData.callType} call from ${callData.caller.username}`);
+                currentCall = callData;
+                showIncomingCall(callData);
+            });
+
+            socket.on('call_answered', async (callData) => {
+                log(`✅ Call answered by ${callData.receiver.username}`);
+                currentCall = callData;
+                
+                // Create offer if we initiated the call
+                if (callData.callerId === currentUser.id) {
+                    await createOffer(callData.callType);
+                }
+            });
+
+            socket.on('call_declined', (callData) => {
+                log(`❌ Call declined by ${callData.receiver.username}`);
+                updateCallStatus('', 'Call declined');
+                showCallControls(false);
+                closeVideoCall();
+                currentCall = null;
+            });
+
+            socket.on('call_ended', (callData) => {
+                log(`📞 Call ended. Duration: ${callData.duration || 'Unknown'}`);
+                updateCallStatus('', 'Call ended');
+                showCallControls(false);
+                hideIncomingCall();
+                closeVideoCall();
+                currentCall = null;
+                addToCallHistory(callData);
+            });
+
+            socket.on('call_signal', async (signalData) => {
+                log(`🔄 Received WebRTC signal: ${signalData.type}`);
+                await handleSignaling(signalData);
+            });
+
+            socket.on('user_status_changed', (data) => {
+                log(`👤 ${data.username} is now ${data.isOnline ? 'online' : 'offline'}`);
+                updateUserStatus(data.userId, data.isOnline);
+            });
+
+            socket.on('error', (error) => {
+                log(`❌ Socket error: ${error.message}`);
+            });
+        }
+
+        // WebRTC Functions
+        async function initializePeerConnection(callType) {
+            try {
+                // Create peer connection
+                peerConnection = new RTCPeerConnection(iceServers);
+                
+                // Set up event handlers
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        log('🧊 Sending ICE candidate');
+                        socket.emit('call_signal', {
+                            callId: currentCall.callId,
+                            signal: {
+                                type: 'ice-candidate',
+                                candidate: event.candidate
+                            }
+                        });
+                    }
+                };
+
+                peerConnection.ontrack = (event) => {
+                    log('📺 Received remote track');
+                    const remoteVideo = document.getElementById('remoteVideo');
+                    if (remoteVideo.srcObject !== event.streams[0]) {
+                        remoteVideo.srcObject = event.streams[0];
+                        remoteStream = event.streams[0];
+                    }
+                };
+
+                peerConnection.onconnectionstatechange = () => {
+                    log(`🔗 Connection state: ${peerConnection.connectionState}`);
+                    document.getElementById('connectionState').textContent = peerConnection.connectionState;
+                    
+                    const indicator = document.getElementById('connectionIndicator');
+                    if (peerConnection.connectionState === 'connected') {
+                        indicator.className = 'connection-status connected';
+                        startCallDuration();
+                    } else if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'disconnected') {
+                        indicator.className = 'connection-status connecting';
+                        log('⚠️ Connection lost or failed');
+                    }
+                };
+
+                peerConnection.oniceconnectionstatechange = () => {
+                    log(`🧊 ICE state: ${peerConnection.iceConnectionState}`);
+                    document.getElementById('iceState').textContent = peerConnection.iceConnectionState;
+                };
+
+                peerConnection.onsignalingstatechange = () => {
+                    log(`📡 Signaling state: ${peerConnection.signalingState}`);
+                    document.getElementById('signalingState').textContent = peerConnection.signalingState;
+                };
+
+                // Get user media
+                const constraints = {
+                    audio: true,
+                    video: callType === 'video' ? {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    } : false
+                };
+
+                localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                
+                // Add tracks to peer connection
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                    log(`➕ Added ${track.kind} track to peer connection`);
+                });
+
+                // Display local video
+                if (callType === 'video') {
+                    const localVideo = document.getElementById('localVideo');
+                    localVideo.srcObject = localStream;
+                }
+
+                log('✅ Peer connection initialized successfully');
+                return true;
+            } catch (error) {
+                log(`❌ Error initializing peer connection: ${error.message}`);
+                alert(`Failed to access camera/microphone: ${error.message}`);
+                return false;
+            }
+        }
+
+        async function createOffer(callType) {
+            try {
+                const initialized = await initializePeerConnection(callType);
+                if (!initialized) return;
+
+                log('📝 Creating offer...');
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                socket.emit('call_signal', {
+                    callId: currentCall.callId,
+                    signal: {
+                        type: 'offer',
+                        sdp: offer.sdp
+                    }
+                });
+
+                log('✅ Offer created and sent');
+            } catch (error) {
+                log(`❌ Error creating offer: ${error.message}`);
+            }
+        }
+
+        async function createAnswer(callType) {
+            try {
+                const initialized = await initializePeerConnection(callType);
+                if (!initialized) return;
+
+                log('📝 Creating answer...');
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                socket.emit('call_signal', {
+                    callId: currentCall.callId,
+                    signal: {
+                        type: 'answer',
+                        sdp: answer.sdp
+                    }
+                });
+
+                log('✅ Answer created and sent');
+            } catch (error) {
+                log(`❌ Error creating answer: ${error.message}`);
+            }
+        }
+
+        async function handleSignaling(signalData) {
+            try {
+                if (signalData.type === 'offer') {
+                    log('📥 Received offer, creating answer...');
+                    
+                    if (!peerConnection) {
+                        await initializePeerConnection(currentCall.callType);
+                    }
+
+                    await peerConnection.setRemoteDescription(
+                        new RTCSessionDescription({
+                            type: 'offer',
+                            sdp: signalData.sdp
+                        })
+                    );
+
+                    await createAnswer(currentCall.callType);
+                    
+                } else if (signalData.type === 'answer') {
+                    log('📥 Received answer');
+                    
+                    await peerConnection.setRemoteDescription(
+                        new RTCSessionDescription({
+                            type: 'answer',
+                            sdp: signalData.sdp
+                        })
+                    );
+                    
+                } else if (signalData.type === 'ice-candidate') {
+                    log('📥 Received ICE candidate');
+                    
+                    if (peerConnection && signalData.candidate) {
+                        await peerConnection.addIceCandidate(
+                            new RTCIceCandidate(signalData.candidate)
+                        );
+                    }
+                }
+            } catch (error) {
+                log(`❌ Error handling signaling: ${error.message}`);
+            }
+        }
+
+        function startCallDuration() {
+            callStartTime = Date.now();
+            callDurationInterval = setInterval(() => {
+                const duration = Math.floor((Date.now() - callStartTime) / 1000);
+                const minutes = Math.floor(duration / 60).toString().padStart(2, '0');
+                const seconds = (duration % 60).toString().padStart(2, '0');
+                document.getElementById('callDuration').textContent = `${minutes}:${seconds}`;
+            }, 1000);
+        }
+
+        function stopCallDuration() {
+            if (callDurationInterval) {
+                clearInterval(callDurationInterval);
+                callDurationInterval = null;
+            }
+            callStartTime = null;
+        }
+
+        function closeVideoCall() {
+            // Stop all tracks
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    track.stop();
+                    log(`⏹️ Stopped ${track.kind} track`);
+                });
+                localStream = null;
+            }
+
+            if (remoteStream) {
+                remoteStream.getTracks().forEach(track => track.stop());
+                remoteStream = null;
+            }
+
+            // Close peer connection
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+                log('🔌 Peer connection closed');
+            }
+
+            // Reset video elements
+            const localVideo = document.getElementById('localVideo');
+            const remoteVideo = document.getElementById('remoteVideo');
+            localVideo.srcObject = null;
+            remoteVideo.srcObject = null;
+
+            // Hide video overlay
+            document.getElementById('videoCallOverlay').classList.remove('active');
+
+            // Reset states
+            isAudioMuted = false;
+            isVideoMuted = false;
+            stopCallDuration();
+
+            // Reset WebRTC status
+            document.getElementById('connectionState').textContent = 'New';
+            document.getElementById('iceState').textContent = 'New';
+            document.getElementById('signalingState').textContent = 'Stable';
+        }
+
+        // User search functions
+        async function searchUsers() {
+            const query = document.getElementById('searchInput').value.trim();
+
+            if (!authToken) {
+                log('❌ Please login first');
+                return;
+            }
+
+            if (query.length > 0 && query.length < 2) {
+                log('⚠️ Search query must be at least 2 characters');
+                return;
+            }
+
+            if (query.length === 0) {
+                log('⚠️ Please enter a search query or use "Load All" button');
+                return;
+            }
+
+            try {
+                log(`🔍 Searching for users: "${query}"`);
+
+                const response = await fetch(baseUrl + `/api/chat/search/users?query=${encodeURIComponent(query)}`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    users = data.users || [];
+                    displayUsers(users);
+                    log(`✅ Found ${users.length} users for "${query}"`);
+                } else {
+                    log(`❌ Search failed: ${data.error || data.message}`);
+                    users = [];
+                    displayUsers(users);
+                }
+            } catch (error) {
+                log(`❌ Search error: ${error.message}`);
+                users = [];
+                displayUsers(users);
+            }
+        }
+
+        async function loadAllUsers() {
+            if (!authToken) {
+                log('❌ Please login first');
+                return;
+            }
+
+            try {
+                log('👥 Loading all users...');
+
+                const searchQueries = ['te', 'us', 'ad', 'ja', 'bo', 'al', 'ch', 'di'];
+                let allUsers = [];
+
+                for (const query of searchQueries) {
+                    try {
+                        const response = await fetch(baseUrl + `/api/chat/search/users?query=${encodeURIComponent(query)}`, {
+                            headers: {
+                                'Authorization': `Bearer ${authToken}`
+                            }
+                        });
+
+                        const data = await response.json();
+
+                        if (response.ok && data.users) {
+                            log(`✅ Found ${data.users.length} users for pattern "${query}"`);
+                            data.users.forEach(user => {
+                                if (!allUsers.find(u => u.id === user.id)) {
+                                    allUsers.push(user);
+                                }
+                            });
+                        } else {
+                            log(`⚠️ Search for "${query}" failed: ${data.error || data.message || 'Unknown error'}`);
+                        }
+                    } catch (error) {
+                        log(`❌ Search for "${query}" error: ${error.message}`);
+                    }
+                }
+
+                users = allUsers;
+                displayUsers(users);
+                log(`✅ Loaded ${users.length} total users`);
+
+                if (users.length === 0) {
+                    log('💡 No users found. Try creating test users first!');
+                }
+            } catch (error) {
+                log(`❌ Error loading users: ${error.message}`);
+                users = [];
+                displayUsers(users);
+            }
+        }
+
+        async function quickSearch(searchTerm) {
+            document.getElementById('searchInput').value = searchTerm;
+            await searchUsers();
+        }
+
+        function displayUsers(userList) {
+            const userListEl = document.getElementById('userList');
+            userListEl.innerHTML = '';
+
+            if (userList.length === 0) {
+                userListEl.innerHTML = `
+                    <div style="padding: 20px; text-align: center; color: #6c757d;">
+                        <p>No users found</p>
+                        <small>Try creating test users or searching with different terms</small>
+                    </div>
+                `;
+                return;
+            }
+
+            userList.forEach(user => {
+                if (user.id === currentUser?.id) return;
+
+                const userEl = document.createElement('div');
+                userEl.className = 'user-item';
+                userEl.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong>${user.username}</strong><br>
+                            <small style="color: #6c757d;">${user.email}</small>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="color: ${user.isOnline ? 'green' : 'gray'}; font-size: 12px;">
+                                ${user.isOnline ? '🟢 Online' : '⚫ Offline'}
+                            </span><br>
+                            <small style="color: #007bff; cursor: pointer;">Click to select</small>
+                        </div>
+                    </div>
+                `;
+                userEl.onclick = () => selectUser(user);
+                userListEl.appendChild(userEl);
+            });
+
+            log(`📋 Displaying ${userList.length} users (excluding yourself)`);
+        }
+
+        function selectUser(user) {
+            selectedUserId = user.id;
+            document.getElementById('selectedUser').value = `${user.username} (${user.email})`;
+
+            document.querySelectorAll('.user-item').forEach(el => el.classList.remove('selected'));
+            event.target.closest('.user-item').classList.add('selected');
+
+            if (socket && socket.connected) {
+                document.getElementById('voiceCallBtn').disabled = false;
+                document.getElementById('videoCallBtn').disabled = false;
+                document.getElementById('callingInstructions').style.display = 'none';
+            } else {
+                log('⚠️ Connect to socket first to enable calling');
+                document.getElementById('voiceCallBtn').disabled = true;
+                document.getElementById('videoCallBtn').disabled = true;
+            }
+
+            log(`👤 Selected user: ${user.username}`);
+            createDirectChat(user.id);
+        }
+
+        function updateUserStatus(userId, isOnline) {
+            const userItems = document.querySelectorAll('.user-item');
+            userItems.forEach(item => {
+                const statusSpan = item.querySelector('span');
+                if (statusSpan) {
+                    statusSpan.innerHTML = isOnline ? '🟢 Online' : '⚫ Offline';
+                    statusSpan.style.color = isOnline ? 'green' : 'gray';
+                }
+            });
+        }
+
+        // Chat functions
+        async function createDirectChat(participantId) {
+            try {
+                const response = await fetch(baseUrl + '/api/chat/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({
+                        participantIds: [participantId],
+                        isGroup: false
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    currentChatId = data.chat.id;
+                    log(`💬 Chat created/found: ${data.chat.id}`);
+
+                    if (socket) {
+                        socket.emit('join_chat', { chatId: currentChatId });
+                    }
+
+                    loadChatMessages(currentChatId);
+                } else {
+                    log(`❌ Chat creation failed: ${data.message}`);
+                }
+            } catch (error) {
+                log(`❌ Chat creation error: ${error.message}`);
+            }
+        }
+
+        async function loadChatMessages(chatId) {
+            try {
+                const response = await fetch(baseUrl + `/api/chat/${chatId}/messages`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    const messagesEl = document.getElementById('chatMessages');
+                    messagesEl.innerHTML = '';
+
+                    data.messages.forEach(message => {
+                        displayMessage(message);
+                    });
+
+                    log(`📨 Loaded ${data.messages.length} messages`);
+                } else {
+                    log(`❌ Failed to load messages: ${data.message}`);
+                }
+            } catch (error) {
+                log(`❌ Message loading error: ${error.message}`);
+            }
+        }
+
+        function displayMessage(message) {
+            const messagesEl = document.getElementById('chatMessages');
+            const messageEl = document.createElement('div');
+            messageEl.className = `message ${message.senderId === currentUser.id ? 'own' : 'other'}`;
+
+            const timestamp = new Date(message.createdAt).toLocaleTimeString();
+            messageEl.innerHTML = `
+                <strong>${message.sender.username}</strong> <small>${timestamp}</small><br>
+                ${message.content}
+            `;
+
+            messagesEl.appendChild(messageEl);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const content = messageInput.value.trim();
+
+            if (!content || !currentChatId || !socket) return;
+
+            socket.emit('send_message', {
+                chatId: currentChatId,
+                content: content,
+                messageType: 'text'
+            });
+
+            messageInput.value = '';
+            log(`📤 Sent message: ${content}`);
+        }
+
+        function handleMessageKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        // Calling functions
+        function initiateVoiceCall() {
+            if (!socket) {
+                log('❌ Please connect to socket first');
+                return;
+            }
+            if (!selectedUserId) {
+                log('❌ Please select a user first');
+                return;
+            }
+
+            const callData = {
+                receiverId: selectedUserId,
+                callType: 'voice',
+                chatId: currentChatId
+            };
+
+            socket.emit('initiate_call', callData);
+            log(`📞 Initiating voice call to user ${selectedUserId}`);
+
+            currentCall = {
+                ...callData,
+                callId: Date.now().toString(),
+                status: 'calling'
+            };
+
+            updateCallStatus('calling', 'Calling...');
+        }
+
+        function initiateVideoCall() {
+            if (!socket) {
+                log('❌ Please connect to socket first');
+                return;
+            }
+            if (!selectedUserId) {
+                log('❌ Please select a user first');
+                return;
+            }
+
+            const callData = {
+                receiverId: selectedUserId,
+                callType: 'video',
+                chatId: currentChatId
+            };
+
+            socket.emit('initiate_call', callData);
+            log(`📹 Initiating video call to user ${selectedUserId}`);
+
+            currentCall = {
+                ...callData,
+                callId: Date.now().toString(),
+                status: 'calling'
+            };
+
+            updateCallStatus('calling', 'Video calling...');
+            
+            // Show video overlay for caller
+            document.getElementById('videoCallOverlay').classList.add('active');
+            const participantName = users.find(u => u.id === selectedUserId)?.username || 'User';
+            document.getElementById('callParticipant').textContent = `Calling ${participantName}...`;
+        }
+
+        async function answerCall() {
+            if (!currentCall || !socket) return;
+
+            socket.emit('answer_call', { callId: currentCall.callId });
+            log(`✅ Answering call ${currentCall.callId}`);
+
+            hideIncomingCall();
+            updateCallStatus('connected', 'Call connected');
+            showCallControls(true);
+
+            // Show video overlay if video call
+            if (currentCall.callType === 'video') {
+                document.getElementById('videoCallOverlay').classList.add('active');
+                document.getElementById('callParticipant').textContent = currentCall.caller.username;
+            }
+
+            // Initialize peer connection and create answer
+            await createAnswer(currentCall.callType);
+        }
+
+        function declineCall() {
+            if (!currentCall || !socket) return;
+
+            socket.emit('decline_call', { callId: currentCall.callId });
+            log(`❌ Declining call ${currentCall.callId}`);
+
+            hideIncomingCall();
+            currentCall = null;
+        }
+
+        function endCall() {
+            if (!currentCall || !socket) return;
+
+            socket.emit('end_call', { callId: currentCall.callId });
+            log(`📞 Ending call ${currentCall.callId}`);
+
+            updateCallStatus('', 'Call ended');
+            showCallControls(false);
+            hideIncomingCall();
+            closeVideoCall();
+            currentCall = null;
+        }
+
+        function toggleAudio() {
+            if (!currentCall || !socket) return;
+
+            socket.emit('toggle_audio', { callId: currentCall.callId });
+            log(`🔇 Toggled audio for call ${currentCall.callId}`);
+
+            const btn = document.getElementById('audioBtn');
+            btn.textContent = btn.textContent.includes('Mute') ? '🔊 Unmute' : '🔇 Mute';
+        }
+
+        function toggleVideo() {
+            if (!currentCall || !socket) return;
+
+            socket.emit('toggle_video', { callId: currentCall.callId });
+            log(`📹 Toggled video for call ${currentCall.callId}`);
+
+            const btn = document.getElementById('videoBtn');
+            btn.textContent = btn.textContent.includes('Video') ? '📹 Video Off' : '📹 Video';
+        }
+
+        function toggleAudioInCall() {
+            if (!localStream) return;
+
+            const audioTrack = localStream.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                isAudioMuted = !audioTrack.enabled;
+                
+                const btn = document.getElementById('videoAudioBtn');
+                btn.className = isAudioMuted ? 'video-control-btn mute active' : 'video-control-btn mute';
+                btn.textContent = isAudioMuted ? '🔇' : '🎤';
+                
+                log(isAudioMuted ? '🔇 Audio muted' : '🎤 Audio unmuted');
+            }
+        }
+
+        function toggleVideoInCall() {
+            if (!localStream) return;
+
+            const videoTrack = localStream.getVideoTracks()[0];
+            if (videoTrack) {
+                videoTrack.enabled = !videoTrack.enabled;
+                isVideoMuted = !videoTrack.enabled;
+                
+                const btn = document.getElementById('videoVideoBtn');
+                btn.className = isVideoMuted ? 'video-control-btn video active' : 'video-control-btn video';
+                btn.textContent = isVideoMuted ? '📹' : '📹';
+                
+                log(isVideoMuted ? '📹 Video disabled' : '📹 Video enabled');
+            }
+        }
+
+        // UI helper functions
+        function updateCallStatus(status, message) {
+            const statusEl = document.getElementById('callStatus');
+            statusEl.style.display = message ? 'block' : 'none';
+            statusEl.className = `status ${status}`;
+            statusEl.textContent = message;
+        }
+
+        function showCallControls(show) {
+            const controlsEl = document.getElementById('callControls');
+            controlsEl.className = show ? 'call-controls active' : 'call-controls';
+        }
+
+        function showIncomingCall(callData) {
+            currentCall = callData;
+
+            document.getElementById('callerName').textContent = callData.caller.username;
+            document.getElementById('callType').textContent = `${callData.callType} Call`;
+            document.getElementById('callerAvatar').textContent = callData.caller.username.charAt(0).toUpperCase();
+
+            document.getElementById('incomingCall').classList.add('show');
+        }
+
+        function hideIncomingCall() {
+            document.getElementById('incomingCall').classList.remove('show');
+        }
+
+        function addToCallHistory(callData) {
+            const historyEl = document.getElementById('callHistory');
+            const callEl = document.createElement('div');
+            callEl.style.cssText = 'padding: 5px; border-bottom: 1px solid #eee; font-size: 12px;';
+
+            const timestamp = new Date().toLocaleTimeString();
+            const duration = callData.duration || 'Unknown';
+            const type = callData.callType || 'voice';
+            const participant = callData.caller?.username || callData.receiver?.username || 'Unknown';
+
+            callEl.innerHTML = `
+                <strong>${type} call</strong> with ${participant}<br>
+                <small>Duration: ${duration} | ${timestamp}</small>
+            `;
+
+            historyEl.insertBefore(callEl, historyEl.firstChild);
+        }
+
+        // Initialize
+        log('🚀 Chat App WebRTC Calling Test Interface loaded');
+        log('📋 Instructions:');
+        log('1. Login or Register with credentials');
+        log('2. Connect to Socket.IO server');
+        log('3. Search and select a user');
+        log('4. Start voice or video calls');
+        log('5. Test chat messaging');
+        log('💡 WebRTC will request camera/microphone permissions when you make a call');
+    </script>
+</body>
+
+</html>
