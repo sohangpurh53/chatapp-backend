@@ -397,8 +397,15 @@
         }
 
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
         }
 
         @media (max-width: 768px) {
@@ -501,7 +508,8 @@
             <div class="panel">
                 <h3>📞 Calling Features</h3>
 
-                <div id="callingInstructions" style="background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 12px;">
+                <div id="callingInstructions"
+                    style="background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 12px;">
                     <strong>📋 To make calls:</strong><br>
                     1. Connect to Socket (left panel)<br>
                     2. Search & select a user (above)<br>
@@ -529,7 +537,8 @@
 
                 <div class="form-group">
                     <h4>WebRTC Status</h4>
-                    <div id="webrtcStatus" style="padding: 10px; background: white; border-radius: 5px; font-size: 12px;">
+                    <div id="webrtcStatus"
+                        style="padding: 10px; background: white; border-radius: 5px; font-size: 12px;">
                         <div>Connection State: <span id="connectionState">New</span></div>
                         <div>ICE State: <span id="iceState">New</span></div>
                         <div>Signaling State: <span id="signalingState">Stable</span></div>
@@ -540,7 +549,8 @@
                     <h4>Audio Test</h4>
                     <button onclick="testMicrophone()" style="background: #17a2b8; margin: 2px;">🎤 Test Mic</button>
                     <button onclick="testSpeakers()" style="background: #17a2b8; margin: 2px;">🔊 Test Speakers</button>
-                    <div id="audioTestResult" style="font-size: 12px; margin-top: 5px; padding: 5px; background: #f8f9fa; border-radius: 3px;">
+                    <div id="audioTestResult"
+                        style="font-size: 12px; margin-top: 5px; padding: 5px; background: #f8f9fa; border-radius: 3px;">
                         Click buttons to test audio devices
                     </div>
                 </div>
@@ -560,8 +570,9 @@
                 <strong>📋 Activity Logs</strong><br>
                 Ready to start testing...<br>
             </div>
-            
-            <div style="background: #212529; color: #28a745; padding: 15px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 12px; height: 300px; overflow-y: auto;">
+
+            <div
+                style="background: #212529; color: #28a745; padding: 15px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 12px; height: 300px; overflow-y: auto;">
                 <strong>🔊 Audio Debug Info</strong><br>
                 <div id="audioDebugInfo">
                     <div>Local Audio: <span id="localAudioStatus">Not initialized</span></div>
@@ -569,8 +580,12 @@
                     <div>Audio Elements: <span id="audioElementsStatus">Not created</span></div>
                     <div>WebRTC Audio: <span id="webrtcAudioStatus">Not started</span></div>
                     <br>
-                    <button onclick="refreshAudioDebug()" style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 3px; font-size: 11px; margin: 2px;">Refresh Debug</button>
-                    <button onclick="fixAudioIssues()" style="background: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 3px; font-size: 11px; margin: 2px;">Fix Audio</button>
+                    <button onclick="refreshAudioDebug()"
+                        style="background: #28a745; color: white; border: none; padding: 5px 10px; border-radius: 3px; font-size: 11px; margin: 2px;">Refresh
+                        Debug</button>
+                    <button onclick="fixAudioIssues()"
+                        style="background: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 3px; font-size: 11px; margin: 2px;">Fix
+                        Audio</button>
                 </div>
             </div>
         </div>
@@ -592,7 +607,8 @@
     <!-- Video Call Overlay -->
     <div id="videoCallOverlay" class="video-call-overlay">
         <div class="call-info">
-            <h3><span class="connection-status connecting" id="connectionIndicator"></span><span id="callParticipant">Connecting...</span></h3>
+            <h3><span class="connection-status connecting" id="connectionIndicator"></span><span
+                    id="callParticipant">Connecting...</span></h3>
             <div id="callDuration">00:00</div>
         </div>
         <div class="video-container">
@@ -814,13 +830,13 @@
             socket.on('connect', () => {
                 log(`✅ Connected to socket server. Socket ID: ${socket.id}`);
                 updateConnectionStatus('connected', `Connected as ${currentUser.username}`);
-                
+
                 if (selectedUserId) {
                     document.getElementById('voiceCallBtn').disabled = false;
                     document.getElementById('videoCallBtn').disabled = false;
                     document.getElementById('callingInstructions').style.display = 'none';
                 }
-                
+
                 log('💡 Use "Create Test Users" button or search for users to start testing');
             });
 
@@ -852,17 +868,17 @@
             socket.on('call_answered', async (callData) => {
                 log(`✅ Call answered by receiver`);
                 currentCall = { ...currentCall, ...callData };
-                
+
                 updateCallStatus('connected', 'Call connected');
                 showCallControls(true);
-                
+
                 // Show video overlay if video call and we are the caller
                 if (currentCall.callType === 'video' && currentCall.callerId === currentUser.id) {
                     document.getElementById('videoCallOverlay').classList.add('active');
                     const participantName = users.find(u => u.id === currentCall.receiverId)?.username || 'User';
                     document.getElementById('callParticipant').textContent = participantName;
                 }
-                
+
                 // Create offer if we initiated the call
                 if (currentCall.callerId === currentUser.id) {
                     await createOffer(currentCall.callType);
@@ -903,7 +919,7 @@
                 showCallControls(false);
                 hideIncomingCall();
                 closeVideoCall();
-                
+
                 if (currentCall) {
                     addToCallHistory({
                         ...currentCall,
@@ -911,7 +927,7 @@
                         endedBy: callData.endedBy
                     });
                 }
-                
+
                 currentCall = null;
             });
 
@@ -943,7 +959,7 @@
             try {
                 // Create peer connection
                 peerConnection = new RTCPeerConnection(iceServers);
-                
+
                 // Set up event handlers
                 peerConnection.onicecandidate = (event) => {
                     if (event.candidate && currentCall) {
@@ -962,10 +978,10 @@
 
                 peerConnection.ontrack = (event) => {
                     log(`📺 Received remote ${event.track.kind} track`);
-                    
+
                     if (event.streams && event.streams[0]) {
                         remoteStream = event.streams[0];
-                        
+
                         if (currentCall.callType === 'video') {
                             const remoteVideo = document.getElementById('remoteVideo');
                             if (remoteVideo.srcObject !== event.streams[0]) {
@@ -984,7 +1000,7 @@
                                 document.body.appendChild(remoteAudio);
                                 log('✅ Created remote audio element');
                             }
-                            
+
                             if (remoteAudio.srcObject !== event.streams[0]) {
                                 remoteAudio.srcObject = event.streams[0];
                                 log('✅ Remote audio stream attached');
@@ -996,12 +1012,12 @@
                 peerConnection.onconnectionstatechange = () => {
                     log(`🔗 Connection state: ${peerConnection.connectionState}`);
                     document.getElementById('connectionState').textContent = peerConnection.connectionState;
-                    
+
                     const indicator = document.getElementById('connectionIndicator');
                     if (peerConnection.connectionState === 'connected') {
                         indicator.className = 'connection-status connected';
                         startCallDuration();
-                        
+
                         // Test audio when connected
                         testAudioConnection();
                     } else if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'disconnected') {
@@ -1039,19 +1055,19 @@
                 log(`🎯 Requesting media with constraints: ${JSON.stringify(constraints)}`);
 
                 localStream = await navigator.mediaDevices.getUserMedia(constraints);
-                
+
                 // Verify we got the expected tracks
-                const audioTracks = localStream.getAudioTracks();
-                const videoTracks = localStream.getVideoTracks();
-                
+                // const audioTracks = localStream.getAudioTracks();
+                // const videoTracks = localStream.getVideoTracks();
+
                 if (audioTracks.length === 0) {
                     throw new Error('No audio track obtained from getUserMedia');
                 }
-                
+
                 if (callType === 'video' && videoTracks.length === 0) {
                     log('⚠️ No video track obtained, falling back to audio only');
                 }
-                
+
                 // Add tracks to peer connection
                 localStream.getTracks().forEach(track => {
                     const sender = peerConnection.addTrack(track, localStream);
@@ -1068,16 +1084,16 @@
                     // For voice calls, we still need to handle local audio feedback
                     log('✅ Local audio stream initialized (no visual element needed)');
                 }
-                
+
                 // Test audio tracks
                 const audioTracks = localStream.getAudioTracks();
                 const videoTracks = localStream.getVideoTracks();
                 log(`📊 Local stream: ${audioTracks.length} audio tracks, ${videoTracks.length} video tracks`);
-                
+
                 audioTracks.forEach((track, index) => {
                     log(`🎤 Audio track ${index}: ${track.label}, enabled: ${track.enabled}`);
                 });
-                
+
                 videoTracks.forEach((track, index) => {
                     log(`📹 Video track ${index}: ${track.label}, enabled: ${track.enabled}`);
                 });
@@ -1097,13 +1113,13 @@
                 if (!initialized) return;
 
                 log('📝 Creating offer...');
-                
+
                 // Create offer with proper constraints for audio
                 const offerOptions = {
                     offerToReceiveAudio: true,
                     offerToReceiveVideo: callType === 'video'
                 };
-                
+
                 const offer = await peerConnection.createOffer(offerOptions);
                 await peerConnection.setLocalDescription(offer);
 
@@ -1154,10 +1170,10 @@
         async function handleSignaling(signalData) {
             try {
                 const signal = signalData.signal;
-                
+
                 if (signal.type === 'offer') {
                     log('📥 Received offer, setting remote description...');
-                    
+
                     // Initialize peer connection if not already done
                     if (!peerConnection) {
                         const initialized = await initializePeerConnection(currentCall.callType);
@@ -1174,7 +1190,7 @@
                             sdp: signal.sdp
                         })
                     );
-                    
+
                     log('✅ Remote description set, now creating answer...');
 
                     // Now create the answer
@@ -1182,7 +1198,7 @@
                         offerToReceiveAudio: true,
                         offerToReceiveVideo: currentCall.callType === 'video'
                     };
-                    
+
                     const answer = await peerConnection.createAnswer(answerOptions);
                     await peerConnection.setLocalDescription(answer);
 
@@ -1197,27 +1213,27 @@
                     });
 
                     log('✅ Answer created and sent');
-                    
+
                 } else if (signal.type === 'answer') {
                     log('📥 Received answer, setting remote description...');
-                    
+
                     if (!peerConnection) {
                         log('❌ No peer connection available');
                         return;
                     }
-                    
+
                     await peerConnection.setRemoteDescription(
                         new RTCSessionDescription({
                             type: 'answer',
                             sdp: signal.sdp
                         })
                     );
-                    
+
                     log('✅ Remote description set successfully');
-                    
+
                 } else if (signal.type === 'ice-candidate') {
                     log('📥 Received ICE candidate');
-                    
+
                     if (peerConnection && peerConnection.remoteDescription && signal.candidate) {
                         try {
                             await peerConnection.addIceCandidate(
@@ -1256,7 +1272,7 @@
 
         function testAudioConnection() {
             log('🔊 Testing audio connection...');
-            
+
             // Test local audio
             if (localStream) {
                 const audioTracks = localStream.getAudioTracks();
@@ -1264,42 +1280,42 @@
                     log(`🎤 Local audio track ${index}: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`);
                 });
             }
-            
+
             // Test remote audio
             if (remoteStream) {
                 const audioTracks = remoteStream.getAudioTracks();
                 audioTracks.forEach((track, index) => {
                     log(`🔊 Remote audio track ${index}: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`);
                 });
-                
+
                 // Ensure remote audio element is properly configured
                 const remoteAudio = document.getElementById('remoteAudio');
                 if (remoteAudio && currentCall.callType === 'voice') {
                     remoteAudio.volume = 1.0;
                     remoteAudio.muted = false;
-                    
+
                     // Force play if paused
                     if (remoteAudio.paused) {
                         remoteAudio.play().catch(e => log(`⚠️ Could not play remote audio: ${e.message}`));
                     }
-                    
+
                     log(`🔊 Remote audio element: volume=${remoteAudio.volume}, muted=${remoteAudio.muted}, paused=${remoteAudio.paused}`);
                 }
-                
+
                 const remoteVideo = document.getElementById('remoteVideo');
                 if (remoteVideo && currentCall.callType === 'video') {
                     remoteVideo.volume = 1.0;
                     remoteVideo.muted = false;
-                    
+
                     // Force play if paused
                     if (remoteVideo.paused) {
                         remoteVideo.play().catch(e => log(`⚠️ Could not play remote video: ${e.message}`));
                     }
-                    
+
                     log(`📺 Remote video element: volume=${remoteVideo.volume}, muted=${remoteVideo.muted}, paused=${remoteVideo.paused}`);
                 }
             }
-            
+
             // Update debug panel
             refreshAudioDebug();
         }
@@ -1330,7 +1346,7 @@
             const localVideo = document.getElementById('localVideo');
             const remoteVideo = document.getElementById('remoteVideo');
             const remoteAudio = document.getElementById('remoteAudio');
-            
+
             localVideo.srcObject = null;
             remoteVideo.srcObject = null;
             if (remoteAudio) {
@@ -1680,7 +1696,7 @@
             };
 
             updateCallStatus('calling', 'Video calling...');
-            
+
             // Show video overlay for caller
             document.getElementById('videoCallOverlay').classList.add('active');
             const participantName = users.find(u => u.id === selectedUserId)?.username || 'User';
@@ -1760,11 +1776,11 @@
             if (audioTrack) {
                 audioTrack.enabled = !audioTrack.enabled;
                 isAudioMuted = !audioTrack.enabled;
-                
+
                 const btn = document.getElementById('videoAudioBtn');
                 btn.className = isAudioMuted ? 'video-control-btn mute active' : 'video-control-btn mute';
                 btn.textContent = isAudioMuted ? '🔇' : '🎤';
-                
+
                 log(isAudioMuted ? '🔇 Audio muted' : '🎤 Audio unmuted');
             }
         }
@@ -1776,11 +1792,11 @@
             if (videoTrack) {
                 videoTrack.enabled = !videoTrack.enabled;
                 isVideoMuted = !videoTrack.enabled;
-                
+
                 const btn = document.getElementById('videoVideoBtn');
                 btn.className = isVideoMuted ? 'video-control-btn video active' : 'video-control-btn video';
                 btn.textContent = isVideoMuted ? '📹' : '📹';
-                
+
                 log(isVideoMuted ? '📹 Video disabled' : '📹 Video enabled');
             }
         }
@@ -1819,7 +1835,7 @@
 
             const timestamp = new Date().toLocaleTimeString();
             const type = callData.callType || 'voice';
-            
+
             // Determine participant name
             let participant = 'Unknown';
             if (callData.callerId === currentUser.id) {
@@ -1844,7 +1860,7 @@
         // Audio fix function
         function fixAudioIssues() {
             log('🔧 Attempting to fix audio issues...');
-            
+
             try {
                 // Fix remote audio element
                 const remoteAudio = document.getElementById('remoteAudio');
@@ -1853,14 +1869,14 @@
                     remoteAudio.volume = 1.0;
                     remoteAudio.muted = false;
                     remoteAudio.autoplay = true;
-                    
+
                     remoteAudio.play().then(() => {
                         log('✅ Remote audio element fixed and playing');
                     }).catch(e => {
                         log(`⚠️ Could not play remote audio: ${e.message}`);
                     });
                 }
-                
+
                 // Fix remote video element
                 const remoteVideo = document.getElementById('remoteVideo');
                 if (remoteVideo && remoteStream) {
@@ -1868,14 +1884,14 @@
                     remoteVideo.volume = 1.0;
                     remoteVideo.muted = false;
                     remoteVideo.autoplay = true;
-                    
+
                     remoteVideo.play().then(() => {
                         log('✅ Remote video element fixed and playing');
                     }).catch(e => {
                         log(`⚠️ Could not play remote video: ${e.message}`);
                     });
                 }
-                
+
                 // Unmute all audio tracks
                 if (remoteStream) {
                     remoteStream.getAudioTracks().forEach(track => {
@@ -1883,7 +1899,7 @@
                         log(`🔊 Enabled remote audio track: ${track.label}`);
                     });
                 }
-                
+
                 if (localStream) {
                     localStream.getAudioTracks().forEach(track => {
                         if (track.muted) {
@@ -1892,10 +1908,10 @@
                         }
                     });
                 }
-                
+
                 refreshAudioDebug();
                 log('✅ Audio fix attempt completed');
-                
+
             } catch (error) {
                 log(`❌ Error fixing audio: ${error.message}`);
             }
@@ -1907,7 +1923,7 @@
             const remoteAudioStatus = document.getElementById('remoteAudioStatus');
             const audioElementsStatus = document.getElementById('audioElementsStatus');
             const webrtcAudioStatus = document.getElementById('webrtcAudioStatus');
-            
+
             // Check local audio
             if (localStream) {
                 const audioTracks = localStream.getAudioTracks();
@@ -1920,7 +1936,7 @@
             } else {
                 localAudioStatus.textContent = '❌ No local stream';
             }
-            
+
             // Check remote audio
             if (remoteStream) {
                 const audioTracks = remoteStream.getAudioTracks();
@@ -1933,11 +1949,11 @@
             } else {
                 remoteAudioStatus.textContent = '❌ No remote stream';
             }
-            
+
             // Check audio elements
             const remoteAudio = document.getElementById('remoteAudio');
             const remoteVideo = document.getElementById('remoteVideo');
-            
+
             let elementsInfo = '';
             if (remoteAudio) {
                 elementsInfo += `Audio: vol=${remoteAudio.volume}, muted=${remoteAudio.muted}<br>`;
@@ -1946,7 +1962,7 @@
                 elementsInfo += `Video: vol=${remoteVideo.volume}, muted=${remoteVideo.muted}`;
             }
             audioElementsStatus.innerHTML = elementsInfo || 'No elements found';
-            
+
             // Check WebRTC status
             if (peerConnection) {
                 webrtcAudioStatus.innerHTML = `✅ Active<br>&nbsp;&nbsp;State: ${peerConnection.connectionState}<br>&nbsp;&nbsp;ICE: ${peerConnection.iceConnectionState}`;
@@ -1961,21 +1977,21 @@
                 log('🎤 Testing microphone...');
                 const testResult = document.getElementById('audioTestResult');
                 testResult.textContent = 'Testing microphone...';
-                
-                const stream = await navigator.mediaDevices.getUserMedia({ 
+
+                const stream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         echoCancellation: true,
                         noiseSuppression: true,
                         autoGainControl: true
-                    } 
+                    }
                 });
-                
+
                 const audioTracks = stream.getAudioTracks();
                 if (audioTracks.length > 0) {
                     const track = audioTracks[0];
                     testResult.innerHTML = `✅ Microphone working<br>Device: ${track.label}<br>Enabled: ${track.enabled}`;
                     log(`✅ Microphone test passed: ${track.label}`);
-                    
+
                     // Stop the test stream
                     setTimeout(() => {
                         stream.getTracks().forEach(track => track.stop());
@@ -1996,19 +2012,19 @@
                 log('🔊 Testing speakers...');
                 const testResult = document.getElementById('audioTestResult');
                 testResult.textContent = 'Testing speakers...';
-                
+
                 // Create a test audio element
                 const audio = new Audio();
                 audio.src = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT';
-                
+
                 audio.volume = 0.1; // Low volume for test
-                
+
                 const playPromise = audio.play();
                 if (playPromise !== undefined) {
                     playPromise.then(() => {
                         testResult.textContent = '✅ Speakers working - you should hear a brief tone';
                         log('✅ Speaker test: audio playing');
-                        
+
                         setTimeout(() => {
                             audio.pause();
                             audio.currentTime = 0;
@@ -2025,8 +2041,54 @@
             }
         }
 
+        // Function availability check
+        function checkFunctions() {
+            const functions = ['login', 'register', 'searchUsers', 'loadAllUsers', 'testMicrophone', 'testSpeakers', 'debounceSearch'];
+            const missing = [];
+            
+            functions.forEach(funcName => {
+                if (typeof window[funcName] !== 'function') {
+                    missing.push(funcName);
+                }
+            });
+            
+            if (missing.length > 0) {
+                log(`❌ Missing functions: ${missing.join(', ')}`);
+                console.error('Missing functions:', missing);
+            } else {
+                log('✅ All functions are properly defined');
+            }
+        }
+
+        // Ensure functions are globally accessible
+        window.login = login;
+        window.register = register;
+        window.searchUsers = searchUsers;
+        window.loadAllUsers = loadAllUsers;
+        window.testMicrophone = testMicrophone;
+        window.testSpeakers = testSpeakers;
+        window.debounceSearch = debounceSearch;
+        window.quickSearch = quickSearch;
+        window.createTestUsers = createTestUsers;
+        window.connectSocket = connectSocket;
+        window.disconnectSocket = disconnectSocket;
+        window.sendMessage = sendMessage;
+        window.handleMessageKeyPress = handleMessageKeyPress;
+        window.initiateVoiceCall = initiateVoiceCall;
+        window.initiateVideoCall = initiateVideoCall;
+        window.answerCall = answerCall;
+        window.declineCall = declineCall;
+        window.endCall = endCall;
+        window.toggleAudio = toggleAudio;
+        window.toggleVideo = toggleVideo;
+        window.toggleAudioInCall = toggleAudioInCall;
+        window.toggleVideoInCall = toggleVideoInCall;
+        window.refreshAudioDebug = refreshAudioDebug;
+        window.fixAudioIssues = fixAudioIssues;
+
         // Initialize
         log('🚀 Chat App WebRTC Calling Test Interface loaded');
+        checkFunctions();
         log('📋 Instructions:');
         log('1. Login or Register with credentials');
         log('2. Connect to Socket.IO server');
