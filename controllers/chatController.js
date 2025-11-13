@@ -140,9 +140,9 @@ const getUserChats = async (req, res) => {
           }]
         }
       ],
-      // where: {
-      //   '$participants.id$': userId
-      // },
+      where: {
+        '$participants.id$': userId
+      },
       order: [['updatedAt', 'DESC']],
       distinct: true
     });
