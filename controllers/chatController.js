@@ -113,9 +113,36 @@ const createChat = async (req, res) => {
 
 const getUserChats = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user?.id;
 
+    if (!userId) {
+      console.error('User ID is null or undefined:', req.user);
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    console.log('Getting chats for user:', userId);
+
+    // First, let's get all chat participants for this user
+    const userParticipations = await ChatParticipant.findAll({
+      where: {
+        userId: userId,
+        isActive: true
+      },
+      attributes: ['chatId']
+    });
+
+    const chatIds = userParticipations.map(p => p.chatId);
+    console.log('User participates in chats:', chatIds);
+
+    if (chatIds.length === 0) {
+      return res.json({ chats: [] });
+    }
+
+    // Now get the chats with all necessary includes
     const chats = await Chat.findAll({
+      where: {
+        id: { [Op.in]: chatIds }
+      },
       include: [
         {
           model: User,
@@ -125,7 +152,7 @@ const getUserChats = async (req, res) => {
             where: { isActive: true },
             attributes: []
           },
-          required: true
+          required: false
         },
         {
           model: User,
@@ -152,16 +179,16 @@ const getUserChats = async (req, res) => {
           }]
         }
       ],
-      where: {
-        '$participants.id$': userId
-      },
       order: [['lastActivityAt', 'DESC']],
       distinct: true
     });
 
+    console.log(`Found ${chats.length} chats for user ${userId}`);
     res.json({ chats });
   } catch (error) {
     console.error('Get user chats error:', error);
+    console.error('Error details:', error.message);
+    console.error('Stack trace:', error.stack);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
