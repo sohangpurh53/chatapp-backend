@@ -121,11 +121,23 @@ const getUserChats = async (req, res) => {
           model: User,
           as: 'participants',
           attributes: ['id', 'username', 'avatar', 'isOnline'],
-          through: { 
+          through: {
             where: { isActive: true },
             attributes: []
           },
           required: true
+        },
+        {
+          model: User,
+          as: 'participant1',
+          attributes: ['id', 'username', 'avatar', 'isOnline'],
+          required: false
+        },
+        {
+          model: User,
+          as: 'participant2',
+          attributes: ['id', 'username', 'avatar', 'isOnline'],
+          required: false
         },
         {
           model: Message,
@@ -143,7 +155,7 @@ const getUserChats = async (req, res) => {
       where: {
         '$participants.id$': userId
       },
-      order: [['updatedAt', 'DESC']],
+      order: [['lastActivityAt', 'DESC']],
       distinct: true
     });
 
