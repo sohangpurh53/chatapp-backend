@@ -1,4 +1,5 @@
-const { Message, User, Chat, ChatParticipant, Call } = require('../models');
+const { Message, User, Chat, ChatParticipant, Call, MessageReceipt } = require('../models');
+const { Op } = require('sequelize');
 const redisService = require('../config/redis');
 const { v4: uuidv4 } = require('uuid');
 
@@ -88,7 +89,7 @@ class SocketHandlers {
 
   async handleSendMessage(socket, data) {
     try {
-      const { chatId, content, messageType = 'text', fileUrl, fileName, fileSize } = data;
+      const { chatId, content, messageType = 'text', fileUrl, fileName, fileSize, replyToId } = data;
 
       // Verify user is participant
       const participant = await ChatParticipant.findOne({
@@ -104,6 +105,19 @@ class SocketHandlers {
         return;
       }
 
+      // Get chat info to determine if it's direct or group
+      const chat = await Chat.findByPk(chatId);
+      if (!chat) {
+        socket.emit('error', { message: 'Chat not found' });
+        return;
+      }
+
+      // For direct chats, set receiverId
+      let receiverId = null;
+      if (!chat.isGroup) {
+        receiverId = chat.participant1Id === socket.userId ? chat.participant2Id : chat.participant1Id;
+      }
+
       // Create message
       const message = await Message.create({
         content,
@@ -112,23 +126,62 @@ class SocketHandlers {
         fileName,
         fileSize,
         senderId: socket.userId,
-        chatId
+        receiverId,
+        chatId,
+        replyToId,
+        status: 'sent'
       });
 
       // Fetch complete message data
       const completeMessage = await Message.findByPk(message.id, {
-        include: [{
-          model: User,
-          as: 'sender',
-          attributes: ['id', 'username', 'avatar']
-        }]
+        include: [
+          {
+            model: User,
+            as: 'sender',
+            attributes: ['id', 'username', 'avatar']
+          },
+          {
+            model: User,
+            as: 'receiver',
+            attributes: ['id', 'username', 'avatar'],
+            required: false
+          },
+          {
+            model: Message,
+            as: 'replyTo',
+            attributes: ['id', 'content', 'messageType'],
+            include: [{
+              model: User,
+              as: 'sender',
+              attributes: ['id', 'username']
+            }],
+            required: false
+          }
+        ]
       });
 
-      // Update chat's updatedAt
+      // Update chat's last activity
       await Chat.update(
-        { updatedAt: new Date() },
+        { lastActivityAt: new Date() },
         { where: { id: chatId } }
       );
+
+      // Create delivery receipts for all participants (except sender)
+      const participants = await ChatParticipant.findAll({
+        where: {
+          chatId,
+          userId: { [Op.ne]: socket.userId },
+          isActive: true
+        }
+      });
+
+      for (const participant of participants) {
+        await MessageReceipt.create({
+          messageId: message.id,
+          userId: participant.userId,
+          status: 'delivered'
+        });
+      }
 
       // Emit to all participants in the chat
       this.io.to(`chat_${chatId}`).emit('new_message', completeMessage);
@@ -175,15 +228,44 @@ class SocketHandlers {
     });
   }
 
-  handleMessageRead(socket, data) {
-    const { messageId, chatId } = data;
+  async handleMessageRead(socket, data) {
+    try {
+      const { messageId, chatId } = data;
 
-    // Notify sender that message was read
-    socket.to(`chat_${chatId}`).emit('message_read', {
-      messageId,
-      readBy: socket.userId,
-      readAt: new Date()
-    });
+      // Update message receipt
+      const [receipt, created] = await MessageReceipt.findOrCreate({
+        where: { messageId, userId: socket.userId },
+        defaults: { status: 'read', timestamp: new Date() }
+      });
+
+      if (!created && receipt.status !== 'read') {
+        receipt.status = 'read';
+        receipt.timestamp = new Date();
+        await receipt.save();
+      }
+
+      // Update participant's last read message
+      await ChatParticipant.update(
+        { lastReadMessageId: messageId },
+        {
+          where: {
+            userId: socket.userId,
+            chatId,
+            isActive: true
+          }
+        }
+      );
+
+      // Notify sender that message was read
+      socket.to(`chat_${chatId}`).emit('message_read', {
+        messageId,
+        readBy: socket.userId,
+        readAt: new Date()
+      });
+
+    } catch (error) {
+      console.error('Message read error:', error);
+    }
   }
 
   async handleDisconnect(socket) {

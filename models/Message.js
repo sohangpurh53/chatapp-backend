@@ -12,7 +12,7 @@ const Message = sequelize.define('Message', {
     allowNull: true
   },
   messageType: {
-    type: DataTypes.ENUM('text', 'image', 'file', 'audio', 'video'),
+    type: DataTypes.ENUM('text', 'image', 'file', 'audio', 'video', 'system'),
     defaultValue: 'text'
   },
   fileUrl: {
@@ -50,7 +50,51 @@ const Message = sequelize.define('Message', {
       model: 'Chats',
       key: 'id'
     }
+  },
+  // For direct messages, store the receiver ID for easier queries
+  receiverId: {
+    type: DataTypes.UUID,
+    allowNull: true, // null for group messages
+    references: {
+      model: 'Users',
+      key: 'id'
+    }
+  },
+  // Message status for delivery and read receipts
+  status: {
+    type: DataTypes.ENUM('sent', 'delivered', 'read'),
+    defaultValue: 'sent'
+  },
+  // For reply functionality
+  replyToId: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: 'Messages',
+      key: 'id'
+    }
+  },
+  // For message reactions
+  reactions: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: null
   }
+}, {
+  indexes: [
+    {
+      fields: ['chatId', 'createdAt']
+    },
+    {
+      fields: ['senderId']
+    },
+    {
+      fields: ['receiverId']
+    },
+    {
+      fields: ['replyToId']
+    }
+  ]
 });
 
 module.exports = Message;

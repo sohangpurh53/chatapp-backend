@@ -24,7 +24,7 @@ const ChatParticipant = sequelize.define('ChatParticipant', {
     }
   },
   role: {
-    type: DataTypes.ENUM('admin', 'member'),
+    type: DataTypes.ENUM('admin', 'member', 'moderator'),
     defaultValue: 'member'
   },
   joinedAt: {
@@ -38,7 +38,59 @@ const ChatParticipant = sequelize.define('ChatParticipant', {
   isActive: {
     type: DataTypes.BOOLEAN,
     defaultValue: true
+  },
+  // Individual participant settings
+  isMuted: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  mutedUntil: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  // Custom nickname in this chat
+  nickname: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  // Last read message for this participant
+  lastReadMessageId: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: 'Messages',
+      key: 'id'
+    }
+  },
+  // Permissions for group chats
+  permissions: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: {
+      canSendMessages: true,
+      canSendMedia: true,
+      canAddMembers: false,
+      canRemoveMembers: false,
+      canEditGroupInfo: false,
+      canPinMessages: false
+    }
   }
+}, {
+  indexes: [
+    {
+      fields: ['userId', 'chatId'],
+      unique: true
+    },
+    {
+      fields: ['chatId']
+    },
+    {
+      fields: ['userId']
+    },
+    {
+      fields: ['isActive']
+    }
+  ]
 });
 
 module.exports = ChatParticipant;
