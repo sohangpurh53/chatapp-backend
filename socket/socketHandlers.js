@@ -129,12 +129,29 @@ class SocketHandlers {
         receiverId = chat.participant1Id === socket.userId ? chat.participant2Id : chat.participant1Id;
       }
 
-      // Create message with encryption support
+      // Enhanced encryption support
+      let encryptionIv = null;
+      let authTag = null;
+      let encryptionAlgorithm = null;
+      let encryptionVersion = null;
+
+      if (isEncrypted && encryptedContent) {
+        encryptionIv = encryptedContent.iv;
+        authTag = encryptedContent.authTag;
+        encryptionAlgorithm = encryptedContent.algorithm;
+        encryptionVersion = encryptedContent.version;
+      }
+
+      // Create message with enhanced encryption support
       const message = await Message.create({
-        content: isEncrypted ? '[ENCRYPTED]' : content, // Store placeholder for encrypted messages
-        encryptedContent: isEncrypted ? encryptedContent : null,
+        content: isEncrypted ? '[ENCRYPTED]' : content,
+        encryptedContent: isEncrypted ? encryptedContent.encryptedContent : null,
         isEncrypted,
         keyId: isEncrypted ? keyId : null,
+        encryptionIv,
+        authTag,
+        encryptionAlgorithm,
+        encryptionVersion,
         messageType,
         fileUrl,
         fileName,
@@ -146,18 +163,18 @@ class SocketHandlers {
         status: 'sent'
       });
 
-      // Fetch complete message data
+      // Fetch complete message data with sender's public key
       const completeMessage = await Message.findByPk(message.id, {
         include: [
           {
             model: User,
             as: 'sender',
-            attributes: ['id', 'username', 'avatar']
+            attributes: ['id', 'username', 'avatar', 'publicKey']
           },
           {
             model: User,
             as: 'receiver',
-            attributes: ['id', 'username', 'avatar'],
+            attributes: ['id', 'username', 'avatar', 'publicKey'],
             required: false
           },
           {
@@ -167,13 +184,21 @@ class SocketHandlers {
             include: [{
               model: User,
               as: 'sender',
-              attributes: ['id', 'username']
+              attributes: ['id', 'username', 'publicKey']
             }],
             required: false
           }
         ],
         attributes: { 
-          include: ['encryptedContent', 'isEncrypted', 'keyId'] 
+          include: [
+            'encryptedContent', 
+            'isEncrypted', 
+            'keyId',
+            'encryptionIv',
+            'authTag',
+            'encryptionAlgorithm',
+            'encryptionVersion'
+          ] 
         }
       });
 

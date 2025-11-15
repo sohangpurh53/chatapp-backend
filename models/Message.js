@@ -25,6 +25,23 @@ const Message = sequelize.define('Message', {
     type: DataTypes.STRING,
     allowNull: true // User ID of the sender for key identification
   },
+  // Enhanced encryption fields
+  encryptionIv: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  authTag: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  encryptionAlgorithm: {
+    type: DataTypes.STRING,
+    defaultValue: 'AES-256-GCM'
+  },
+  encryptionVersion: {
+    type: DataTypes.INTEGER,
+    defaultValue: 1
+  },
   messageType: {
     type: DataTypes.ENUM('text', 'image', 'file', 'audio', 'video', 'system'),
     defaultValue: 'text'

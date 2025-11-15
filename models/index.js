@@ -6,6 +6,7 @@ const ChatParticipant = require('./ChatParticipant');
 const Call = require('./Call');
 const MessageReceipt = require('./MessageReceipt');
 const GroupInvite = require('./GroupInvite');
+const GroupChatKey = require('./GroupChatKey');
 
 // User associations
 User.hasMany(Message, { foreignKey: 'senderId', as: 'sentMessages' });
@@ -71,6 +72,13 @@ Call.belongsTo(User, { foreignKey: 'callerId', as: 'caller' });
 Call.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
 Call.belongsTo(Chat, { foreignKey: 'chatId', as: 'chat' });
 
+// GroupChatKey associations
+Chat.hasMany(GroupChatKey, { foreignKey: 'chatId', as: 'groupKeys' });
+GroupChatKey.belongsTo(Chat, { foreignKey: 'chatId', as: 'chat' });
+
+User.hasMany(GroupChatKey, { foreignKey: 'userId', as: 'groupChatKeys' });
+GroupChatKey.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
 module.exports = {
   sequelize,
   User,
@@ -79,5 +87,6 @@ module.exports = {
   ChatParticipant,
   Call,
   MessageReceipt,
-  GroupInvite
+  GroupInvite,
+  GroupChatKey
 };
