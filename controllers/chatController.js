@@ -202,7 +202,7 @@ const getChatMessages = async (req, res) => {
         {
           model: Message,
           as: 'replyTo',
-          attributes: ['id', 'content', 'messageType'],
+          attributes: ['id', 'content', 'messageType', 'encryptedContent', 'isEncrypted', 'keyId'],
           include: [{
             model: User,
             as: 'sender',
@@ -221,6 +221,9 @@ const getChatMessages = async (req, res) => {
           required: false
         }
       ],
+      attributes: {
+        include: ['encryptedContent', 'isEncrypted', 'keyId']
+      },
       order: [['createdAt', 'DESC']],
       limit: parseInt(limit),
       offset: parseInt(offset)

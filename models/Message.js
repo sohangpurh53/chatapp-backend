@@ -11,6 +11,20 @@ const Message = sequelize.define('Message', {
     type: DataTypes.TEXT,
     allowNull: true
   },
+  // Encrypted content fields for end-to-end encryption
+  encryptedContent: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: null
+  },
+  isEncrypted: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  keyId: {
+    type: DataTypes.STRING,
+    allowNull: true // User ID of the sender for key identification
+  },
   messageType: {
     type: DataTypes.ENUM('text', 'image', 'file', 'audio', 'video', 'system'),
     defaultValue: 'text'

@@ -89,7 +89,18 @@ class SocketHandlers {
 
   async handleSendMessage(socket, data) {
     try {
-      const { chatId, content, messageType = 'text', fileUrl, fileName, fileSize, replyToId } = data;
+      const { 
+        chatId, 
+        content, 
+        messageType = 'text', 
+        fileUrl, 
+        fileName, 
+        fileSize, 
+        replyToId,
+        encryptedContent,
+        isEncrypted = false,
+        keyId 
+      } = data;
 
       // Verify user is participant
       const participant = await ChatParticipant.findOne({
@@ -118,9 +129,12 @@ class SocketHandlers {
         receiverId = chat.participant1Id === socket.userId ? chat.participant2Id : chat.participant1Id;
       }
 
-      // Create message
+      // Create message with encryption support
       const message = await Message.create({
-        content,
+        content: isEncrypted ? '[ENCRYPTED]' : content, // Store placeholder for encrypted messages
+        encryptedContent: isEncrypted ? encryptedContent : null,
+        isEncrypted,
+        keyId: isEncrypted ? keyId : null,
         messageType,
         fileUrl,
         fileName,
@@ -149,7 +163,7 @@ class SocketHandlers {
           {
             model: Message,
             as: 'replyTo',
-            attributes: ['id', 'content', 'messageType'],
+            attributes: ['id', 'content', 'messageType', 'encryptedContent', 'isEncrypted', 'keyId'],
             include: [{
               model: User,
               as: 'sender',
@@ -157,7 +171,10 @@ class SocketHandlers {
             }],
             required: false
           }
-        ]
+        ],
+        attributes: { 
+          include: ['encryptedContent', 'isEncrypted', 'keyId'] 
+        }
       });
 
       // Update chat's last activity
