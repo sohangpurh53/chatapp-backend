@@ -454,7 +454,8 @@ class SocketHandlers {
         callId,
         caller,
         callType,
-        chatId
+        chatId,
+        receiverId
       });
 
       // Confirm to caller and store call reference
