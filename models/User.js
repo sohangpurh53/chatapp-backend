@@ -36,6 +36,27 @@ const User = sequelize.define('User', {
   lastSeen: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW
+  },
+  // Encryption fields
+  encryptedPrivateKey: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  publicKey: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  keySalt: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  keyVersion: {
+    type: DataTypes.INTEGER,
+    defaultValue: 1
+  },
+  keyCreatedAt: {
+    type: DataTypes.DATE,
+    allowNull: true
   }
 }, {
   hooks: {

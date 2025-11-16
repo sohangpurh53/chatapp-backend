@@ -8,7 +8,7 @@ const generateToken = (userId) => {
 
 const register = async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    const { username, email, password, publicKey, encryptedPrivateKey, keySalt } = req.body;
 
     // Validate input
     if (!username || !email || !password) {
@@ -36,11 +36,16 @@ const register = async (req, res) => {
       });
     }
 
-    // Create new user
+    // Create new user with encryption keys
     const user = await User.create({
       username,
       email,
-      password
+      password,
+      publicKey,
+      encryptedPrivateKey,
+      keySalt,
+      keyVersion: 1,
+      keyCreatedAt: new Date()
     });
 
     const token = generateToken(user.id);
@@ -53,7 +58,8 @@ const register = async (req, res) => {
         username: user.username,
         email: user.email,
         avatar: user.avatar,
-        isOnline: user.isOnline
+        isOnline: user.isOnline,
+        publicKey: user.publicKey
       }
     });
   } catch (error) {
@@ -101,7 +107,8 @@ const login = async (req, res) => {
         username: user.username,
         email: user.email,
         avatar: user.avatar,
-        isOnline: user.isOnline
+        isOnline: user.isOnline,
+        publicKey: user.publicKey
       }
     });
   } catch (error) {
@@ -127,7 +134,7 @@ const logout = async (req, res) => {
 const getProfile = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen']
+      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey']
     });
 
     res.json({ user });
@@ -137,9 +144,34 @@ const getProfile = async (req, res) => {
   }
 };
 
+// Add endpoint to get user's public key
+const getUserPublicKey = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const user = await User.findByPk(userId, {
+      attributes: ['id', 'username', 'publicKey']
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      userId: user.id,
+      username: user.username,
+      publicKey: user.publicKey
+    });
+  } catch (error) {
+    console.error('Get public key error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   register,
   login,
   logout,
-  getProfile
+  getProfile,
+  getUserPublicKey
 };

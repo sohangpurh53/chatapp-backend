@@ -89,7 +89,18 @@ class SocketHandlers {
 
   async handleSendMessage(socket, data) {
     try {
-      const { chatId, content, messageType = 'text', fileUrl, fileName, fileSize, replyToId } = data;
+      const { 
+        chatId, 
+        content, 
+        messageType = 'text', 
+        fileUrl, 
+        fileName, 
+        fileSize, 
+        replyToId,
+        encryptedContent,
+        isEncrypted = false,
+        keyId 
+      } = data;
 
       // Verify user is participant
       const participant = await ChatParticipant.findOne({
@@ -118,9 +129,29 @@ class SocketHandlers {
         receiverId = chat.participant1Id === socket.userId ? chat.participant2Id : chat.participant1Id;
       }
 
-      // Create message
+      // Enhanced encryption support
+      let encryptionIv = null;
+      let authTag = null;
+      let encryptionAlgorithm = null;
+      let encryptionVersion = null;
+
+      if (isEncrypted && encryptedContent) {
+        encryptionIv = encryptedContent.iv;
+        authTag = encryptedContent.authTag;
+        encryptionAlgorithm = encryptedContent.algorithm;
+        encryptionVersion = encryptedContent.version;
+      }
+
+      // Create message with enhanced encryption support
       const message = await Message.create({
-        content,
+        content: isEncrypted ? '[ENCRYPTED]' : content,
+        encryptedContent: isEncrypted ? encryptedContent.encryptedContent : null,
+        isEncrypted,
+        keyId: isEncrypted ? keyId : null,
+        encryptionIv,
+        authTag,
+        encryptionAlgorithm,
+        encryptionVersion,
         messageType,
         fileUrl,
         fileName,
@@ -132,32 +163,43 @@ class SocketHandlers {
         status: 'sent'
       });
 
-      // Fetch complete message data
+      // Fetch complete message data with sender's public key
       const completeMessage = await Message.findByPk(message.id, {
         include: [
           {
             model: User,
             as: 'sender',
-            attributes: ['id', 'username', 'avatar']
+            attributes: ['id', 'username', 'avatar', 'publicKey']
           },
           {
             model: User,
             as: 'receiver',
-            attributes: ['id', 'username', 'avatar'],
+            attributes: ['id', 'username', 'avatar', 'publicKey'],
             required: false
           },
           {
             model: Message,
             as: 'replyTo',
-            attributes: ['id', 'content', 'messageType'],
+            attributes: ['id', 'content', 'messageType', 'encryptedContent', 'isEncrypted', 'keyId'],
             include: [{
               model: User,
               as: 'sender',
-              attributes: ['id', 'username']
+              attributes: ['id', 'username', 'publicKey']
             }],
             required: false
           }
-        ]
+        ],
+        attributes: { 
+          include: [
+            'encryptedContent', 
+            'isEncrypted', 
+            'keyId',
+            'encryptionIv',
+            'authTag',
+            'encryptionAlgorithm',
+            'encryptionVersion'
+          ] 
+        }
       });
 
       // Update chat's last activity
@@ -412,7 +454,8 @@ class SocketHandlers {
         callId,
         caller,
         callType,
-        chatId
+        chatId,
+        receiverId
       });
 
       // Confirm to caller and store call reference
