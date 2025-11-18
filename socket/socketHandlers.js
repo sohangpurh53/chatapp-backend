@@ -32,7 +32,7 @@ class SocketHandlers {
     socket.on('typing_stop', (data) => this.handleTypingStop(socket, data));
     socket.on('message_read', (data) => this.handleMessageRead(socket, data));
 
-    // Call events
+    // Call events (existing format)
     socket.on('initiate_call', (data) => this.handleInitiateCall(socket, data));
     socket.on('answer_call', (data) => this.handleAnswerCall(socket, data));
     socket.on('decline_call', (data) => this.handleDeclineCall(socket, data));
@@ -42,6 +42,17 @@ class SocketHandlers {
     socket.on('toggle_video', (data) => this.handleToggleVideo(socket, data));
     socket.on('share_screen', (data) => this.handleShareScreen(socket, data));
     socket.on('stop_screen_share', (data) => this.handleStopScreenShare(socket, data));
+
+    // WebRTC Signaling events (for SignalingService)
+    socket.on('join-room', (data) => this.handleJoinRoom(socket, data));
+    socket.on('leave-room', (data) => this.handleLeaveRoom(socket, data));
+    socket.on('offer', (data) => this.handleOffer(socket, data));
+    socket.on('answer', (data) => this.handleAnswer(socket, data));
+    socket.on('ice-candidate', (data) => this.handleIceCandidate(socket, data));
+    socket.on('initiate-call', (data) => this.handleInitiateCallSignaling(socket, data));
+    socket.on('accept-call', (data) => this.handleAcceptCall(socket, data));
+    socket.on('reject-call', (data) => this.handleRejectCall(socket, data));
+    socket.on('end-call', (data) => this.handleEndCallSignaling(socket, data));
 
     socket.on('disconnect', () => this.handleDisconnect(socket));
   }
@@ -791,6 +802,117 @@ class SocketHandlers {
   // Method to send message to all users in a chat
   sendToChat(chatId, event, data) {
     this.io.to(`chat_${chatId}`).emit(event, data);
+  }
+
+  // WebRTC Signaling handlers (for SignalingService compatibility)
+  
+  handleJoinRoom(socket, data) {
+    const { roomId, userId, userName } = data;
+    console.log(`User ${userName} (${userId}) joining room ${roomId}`);
+    
+    socket.join(`room_${roomId}`);
+    
+    // Notify others in room
+    socket.to(`room_${roomId}`).emit('user-joined', {
+      userId,
+      userName,
+      socketId: socket.id
+    });
+    
+    // Send existing users to new joiner (if needed for group calls)
+    // For now, just acknowledge
+    socket.emit('room-joined', { roomId, userId });
+  }
+
+  handleLeaveRoom(socket, data) {
+    const { roomId, userId } = data;
+    console.log(`User ${userId} leaving room ${roomId}`);
+    
+    socket.leave(`room_${roomId}`);
+    socket.to(`room_${roomId}`).emit('user-left', { userId });
+  }
+
+  handleOffer(socket, data) {
+    const { offer, to, from } = data;
+    console.log(`Forwarding offer from ${from} to ${to}`);
+    
+    const targetSocketId = this.connectedUsers.get(to);
+    if (targetSocketId) {
+      this.io.to(targetSocketId).emit('offer', { offer, from });
+    } else {
+      console.warn(`Target user ${to} not found for offer`);
+    }
+  }
+
+  handleAnswer(socket, data) {
+    const { answer, to, from } = data;
+    console.log(`Forwarding answer from ${from} to ${to}`);
+    
+    const targetSocketId = this.connectedUsers.get(to);
+    if (targetSocketId) {
+      this.io.to(targetSocketId).emit('answer', { answer, from });
+    } else {
+      console.warn(`Target user ${to} not found for answer`);
+    }
+  }
+
+  handleIceCandidate(socket, data) {
+    const { candidate, to, from } = data;
+    console.log(`Forwarding ICE candidate from ${from} to ${to}`);
+    
+    const targetSocketId = this.connectedUsers.get(to);
+    if (targetSocketId) {
+      this.io.to(targetSocketId).emit('ice-candidate', { candidate, from });
+    } else {
+      console.warn(`Target user ${to} not found for ICE candidate`);
+    }
+  }
+
+  async handleInitiateCallSignaling(socket, data) {
+    const { to, from, userName, callType } = data;
+    console.log(`Call from ${from} (${userName}) to ${to}, type: ${callType}`);
+    
+    const targetSocketId = this.connectedUsers.get(to);
+    if (targetSocketId) {
+      this.io.to(targetSocketId).emit('incoming-call', {
+        from,
+        userName,
+        callType,
+        socketId: socket.id
+      });
+    } else {
+      socket.emit('call-error', { message: 'User is offline' });
+    }
+  }
+
+  handleAcceptCall(socket, data) {
+    const { to, from } = data;
+    console.log(`Call accepted by ${from}, notifying ${to}`);
+    
+    const targetSocketId = this.connectedUsers.get(to);
+    if (targetSocketId) {
+      this.io.to(targetSocketId).emit('call-accepted', { from });
+    }
+  }
+
+  handleRejectCall(socket, data) {
+    const { to, from } = data;
+    console.log(`Call rejected by ${from}`);
+    
+    const targetSocketId = this.connectedUsers.get(to);
+    if (targetSocketId) {
+      this.io.to(targetSocketId).emit('call-rejected', { from });
+    }
+  }
+
+  handleEndCallSignaling(socket, data) {
+    const { to, from } = data;
+    console.log(`Call ended by ${from}`);
+    
+    const targetSocketId = this.connectedUsers.get(to);
+    if (targetSocketId) {
+      this.io.to(targetSocketId).emit('call-ended', { from });
+    }
   }
 }
 
