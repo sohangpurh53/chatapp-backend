@@ -869,49 +869,74 @@ class SocketHandlers {
   }
 
   async handleInitiateCallSignaling(socket, data) {
-    const { to, from, userName, callType } = data;
-    console.log(`Call from ${from} (${userName}) to ${to}, type: ${callType}`);
-    
-    const targetSocketId = this.connectedUsers.get(to);
-    if (targetSocketId) {
-      this.io.to(targetSocketId).emit('incoming-call', {
-        from,
-        userName,
-        callType,
-        socketId: socket.id
+    try {
+      const { to, callId, callType, offer } = data;
+      console.log(`Call from ${socket.userId} to ${to}, type: ${callType}, callId: ${callId}`);
+      
+      // Check if receiver is online
+      const targetSocketId = this.connectedUsers.get(to);
+      if (!targetSocketId) {
+        socket.emit('call-error', { message: 'User is offline' });
+        return;
+      }
+
+      // Get caller info
+      const caller = await User.findByPk(socket.userId, {
+        attributes: ['id', 'username', 'avatar']
       });
-    } else {
-      socket.emit('call-error', { message: 'User is offline' });
+
+      // Notify receiver with proper data structure
+      this.io.to(targetSocketId).emit('incoming-call', {
+        callId,
+        from: socket.userId,
+        callerName: caller.username,
+        callerAvatar: caller.avatar,
+        callType
+      });
+
+      console.log(`Incoming call sent to user ${to} with callId ${callId}`);
+    } catch (error) {
+      console.error('Initiate call signaling error:', error);
+      socket.emit('call-error', { message: 'Failed to initiate call' });
     }
   }
 
   handleAcceptCall(socket, data) {
-    const { to, from } = data;
-    console.log(`Call accepted by ${from}, notifying ${to}`);
+    const { to, callId } = data;
+    console.log(`Call ${callId} accepted by ${socket.userId}, notifying ${to}`);
     
     const targetSocketId = this.connectedUsers.get(to);
     if (targetSocketId) {
-      this.io.to(targetSocketId).emit('call-accepted', { from });
+      this.io.to(targetSocketId).emit('call-accepted', { 
+        callId,
+        from: socket.userId 
+      });
     }
   }
 
   handleRejectCall(socket, data) {
-    const { to, from } = data;
-    console.log(`Call rejected by ${from}`);
+    const { to, callId } = data;
+    console.log(`Call ${callId} rejected by ${socket.userId}`);
     
     const targetSocketId = this.connectedUsers.get(to);
     if (targetSocketId) {
-      this.io.to(targetSocketId).emit('call-rejected', { from });
+      this.io.to(targetSocketId).emit('call-rejected', { 
+        callId,
+        from: socket.userId 
+      });
     }
   }
 
   handleEndCallSignaling(socket, data) {
-    const { to, from } = data;
-    console.log(`Call ended by ${from}`);
+    const { to, callId } = data;
+    console.log(`Call ${callId} ended by ${socket.userId}`);
     
     const targetSocketId = this.connectedUsers.get(to);
     if (targetSocketId) {
-      this.io.to(targetSocketId).emit('call-ended', { from });
+      this.io.to(targetSocketId).emit('call-ended', { 
+        callId,
+        from: socket.userId 
+      });
     }
   }
 }
