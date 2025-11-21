@@ -859,7 +859,6 @@ class SocketHandlers {
   handleIceCandidate(socket, data) {
     const { candidate, to } = data;
     const from =socket?.userId
-    console.log("Forwarding ICE candidate socket user..", socket?.user)
     console.log(`Forwarding ICE candidate from ${from} to ${to}`);
     
     const targetSocketId = this.connectedUsers.get(to);
