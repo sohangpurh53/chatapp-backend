@@ -875,29 +875,36 @@ class SocketHandlers {
 
     console.log(`[CALL INITIATE] Call from ${socket.userId} to ${to}, type: ${callType}`);
 
+    // Check if receiver is online
     const targetSocketId = this.connectedUsers.get(to);
     if (!targetSocketId) {
+      console.log(`[CALL FAILED] Receiver ${to} is offline`);
       socket.emit('call-error', { message: 'User is offline' });
       return;
     }
 
+    // Check if caller is already in a call
     const existingCallCaller = await redisService.getUserCallStatus(socket.userId);
     if (existingCallCaller) {
+      console.log(`[CALL FAILED] Caller ${socket.userId} is already in a call`);
       socket.emit('call-error', { message: 'You are already in a call' });
       return;
     }
 
+    // Check if receiver is already in a call
     const existingCallReceiver = await redisService.getUserCallStatus(to);
     if (existingCallReceiver) {
+      console.log(`[CALL FAILED] Receiver ${to} is busy`);
       socket.emit('call-error', { message: 'User is busy' });
       return;
     }
 
+    // Get caller info
     const caller = await User.findByPk(socket.userId, {
       attributes: ['id', 'username', 'avatar']
     });
 
-    // Let DB generate UUID
+    // Create call record in database
     const callRecord = await Call.create({
       callerId: socket.userId,
       receiverId: to,
@@ -905,8 +912,9 @@ class SocketHandlers {
       status: 'initiated'
     });
 
-    const callId = callRecord.id; // <- UUID from DB
+    const callId = callRecord.id;
 
+    // Store call data in Redis
     const callData = {
       id: callId,
       callerId: socket.userId,
@@ -921,8 +929,14 @@ class SocketHandlers {
     await redisService.setUserCallStatus(socket.userId, callId, 'calling');
     await redisService.setUserCallStatus(to, callId, 'receiving');
 
-    this.activeCalls.set(callId, callData);
+    console.log(`[CALL TRACKING] Stored call ${callId}: Caller=${socket.userId}, Receiver=${to}`);
 
+    // Store in memory
+    this.activeCalls.set(callId, callData);
+    this.userCalls.set(socket.userId, callId);
+    this.userCalls.set(to, callId);
+
+    // CRITICAL: Send incoming-call event to receiver
     this.io.to(targetSocketId).emit('incoming-call', {
       callId,
       from: socket.userId,
@@ -933,6 +947,9 @@ class SocketHandlers {
       offer
     });
 
+    console.log(`[CALL SENT] Incoming call notification sent to user ${to} on socket ${targetSocketId}`);
+
+    // Confirm to caller
     socket.emit('call-initiated', {
       callId,
       receiverId: to,
@@ -940,9 +957,13 @@ class SocketHandlers {
       status: 'ringing'
     });
 
+    console.log(`[CALL CONFIRMED] Call initiation confirmed to caller ${socket.userId}`);
+
+    // Set timeout for missed call (30 seconds)
     setTimeout(async () => {
       const currentCall = await redisService.getActiveCall(callId);
       if (currentCall && currentCall.status === 'ringing') {
+        console.log(`[CALL TIMEOUT] Call ${callId} timed out`);
         await this.handleMissedCall(callId);
       }
     }, 30000);
