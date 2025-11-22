@@ -906,7 +906,7 @@ class SocketHandlers {
 
       // Create call record in database
       await Call.create({
-        id: callId,
+        // id: callId,
         callerId: socket.userId,
         receiverId: to,
         callType,
@@ -915,7 +915,7 @@ class SocketHandlers {
 
       // Store call in Redis for tracking
       const callData = {
-        // id: callId,
+        id: callId,
         callerId: socket.userId,
         receiverId: to,
         callType,
