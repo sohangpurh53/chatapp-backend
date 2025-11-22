@@ -31,17 +31,17 @@ class SocketHandlers {
     socket.on('typing_start', (data) => this.handleTypingStart(socket, data));
     socket.on('typing_stop', (data) => this.handleTypingStop(socket, data));
     socket.on('message_read', (data) => this.handleMessageRead(socket, data));
+    
 
-    // Call events (existing format)
-    socket.on('initiate_call', (data) => this.handleInitiateCall(socket, data));
-    socket.on('answer_call', (data) => this.handleAnswerCall(socket, data));
-    socket.on('decline_call', (data) => this.handleDeclineCall(socket, data));
-    socket.on('end_call', (data) => this.handleEndCall(socket, data));
-    socket.on('call_signal', (data) => this.handleCallSignal(socket, data));
-    socket.on('toggle_audio', (data) => this.handleToggleAudio(socket, data));
-    socket.on('toggle_video', (data) => this.handleToggleVideo(socket, data));
-    socket.on('share_screen', (data) => this.handleShareScreen(socket, data));
-    socket.on('stop_screen_share', (data) => this.handleStopScreenShare(socket, data));
+    // socket.on('initiate_call', (data) => this.handleInitiateCall(socket, data));
+    // socket.on('answer_call', (data) => this.handleAnswerCall(socket, data));
+    // socket.on('decline_call', (data) => this.handleDeclineCall(socket, data));
+    // socket.on('end_call', (data) => this.handleEndCall(socket, data));
+    // socket.on('call_signal', (data) => this.handleCallSignal(socket, data));
+    // socket.on('toggle_audio', (data) => this.handleToggleAudio(socket, data));
+    // socket.on('toggle_video', (data) => this.handleToggleVideo(socket, data));
+    // socket.on('share_screen', (data) => this.handleShareScreen(socket, data));
+    // socket.on('stop_screen_share', (data) => this.handleStopScreenShare(socket, data));
 
     // WebRTC Signaling events (for SignalingService)
     socket.on('join-room', (data) => this.handleJoinRoom(socket, data));
@@ -872,12 +872,29 @@ class SocketHandlers {
   async handleInitiateCallSignaling(socket, data) {
     try {
       const { to, callId, callType, offer } = data;
-      console.log(`Call from ${socket.userId} to ${to}, type: ${callType}, callId: ${callId}`);
+      console.log(`[CALL INITIATE] Call from ${socket.userId} to ${to}, type: ${callType}, callId: ${callId}`);
       
       // Check if receiver is online
       const targetSocketId = this.connectedUsers.get(to);
       if (!targetSocketId) {
+        console.log(`[CALL ERROR] Receiver ${to} is offline`);
         socket.emit('call-error', { message: 'User is offline' });
+        return;
+      }
+
+      // Check if caller is already in a call
+      const existingCallCaller = await redisService.getUserCallStatus(socket.userId);
+      if (existingCallCaller) {
+        console.log(`[CALL ERROR] Caller ${socket.userId} is already in a call`);
+        socket.emit('call-error', { message: 'You are already in a call' });
+        return;
+      }
+
+      // Check if receiver is already in a call
+      const existingCallReceiver = await redisService.getUserCallStatus(to);
+      if (existingCallReceiver) {
+        console.log(`[CALL ERROR] Receiver ${to} is already in a call`);
+        socket.emit('call-error', { message: 'User is busy' });
         return;
       }
 
@@ -886,26 +903,76 @@ class SocketHandlers {
         attributes: ['id', 'username', 'avatar']
       });
 
+      // Create call record in database
+      await Call.create({
+        id: callId,
+        callerId: socket.userId,
+        receiverId: to,
+        callType,
+        status: 'initiated'
+      });
+
+      // Store call in Redis for tracking
+      const callData = {
+        id: callId,
+        callerId: socket.userId,
+        receiverId: to,
+        callType,
+        status: 'ringing',
+        startedAt: new Date(),
+        participants: [socket.userId, to]
+      };
+
+      await redisService.setActiveCall(callId, callData);
+      await redisService.setUserCallStatus(socket.userId, callId, 'calling');
+      await redisService.setUserCallStatus(to, callId, 'receiving');
+
+      // Store call mapping in memory
+      this.activeCalls.set(callId, callData);
+      this.userCalls.set(socket.userId, callId);
+      this.userCalls.set(to, callId);
+
+      console.log(`[CALL TRACKING] Stored call ${callId}: Caller=${socket.userId}, Receiver=${to}`);
+
       // Notify receiver with proper data structure
       this.io.to(targetSocketId).emit('incoming-call', {
         callId,
         from: socket.userId,
-        to:to,
+        to: to,
         callerName: caller.username,
         callerAvatar: caller.avatar,
-        callType
+        callType,
+        offer
       });
 
-      console.log(`Incoming call sent to user ${to} with callId ${callId}`);
+      console.log(`[CALL SENT] Incoming call notification sent to user ${to} on socket ${targetSocketId}`);
+
+      // Confirm to caller
+      socket.emit('call-initiated', {
+        callId,
+        receiverId: to,
+        callType,
+        status: 'ringing'
+      });
+
+      // Set timeout for missed call (30 seconds)
+      setTimeout(async () => {
+        const currentCall = await redisService.getActiveCall(callId);
+        if (currentCall && currentCall.status === 'ringing') {
+          console.log(`[CALL TIMEOUT] Call ${callId} missed`);
+          await this.handleMissedCall(callId);
+        }
+      }, 30000);
+
     } catch (error) {
-      console.error('Initiate call signaling error:', error);
+      console.error('[CALL ERROR] Initiate call signaling error:', error);
       socket.emit('call-error', { message: 'Failed to initiate call' });
     }
   }
 
   handleAcceptCall(socket, data) {
     const { to, callId } = data;
-    console.log(`Call ${callId} accepted by ${socket.userId}, notifying ${to}`);
+    console.log(`[CALL ACCEPT] Call ${callId} accepted by ${socket.userId}, notifying ${to}`);
     
     const targetSocketId = this.connectedUsers.get(to);
     if (targetSocketId) {
@@ -913,6 +980,9 @@ class SocketHandlers {
         callId,
         from: socket.userId 
       });
+      console.log(`[CALL ACCEPT] Notification sent to caller on socket ${targetSocketId}`);
+    } else {
+      console.log(`[CALL ACCEPT] Caller ${to} not found in connected users`);
     }
   }
 
