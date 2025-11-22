@@ -9,7 +9,9 @@ const {
   inviteToGroup,
   respondToGroupInvite,
   updateGroupInfo,
-  markMessageAsRead
+  markMessageAsRead,
+  getGroupKey,
+  createGroupWithKeys
 } = require('../controllers/chatController');
 
 router.post('/create', authenticateToken, createChat);
@@ -24,5 +26,9 @@ router.put('/:chatId/info', authenticateToken, updateGroupInfo);
 
 // Message management routes
 router.post('/messages/:messageId/read', authenticateToken, markMessageAsRead);
+
+// Encryption key management routes
+router.get('/:chatId/group-key', authenticateToken, getGroupKey);
+router.post('/create-group-with-keys', authenticateToken, createGroupWithKeys);
 
 module.exports = router;

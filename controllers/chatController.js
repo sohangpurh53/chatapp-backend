@@ -451,6 +451,112 @@ const markMessageAsRead = async (req, res) => {
   }
 };
 
+// Get encrypted group key for current user
+const getGroupKey = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.user.id;
+    
+    // Verify user is member of the group
+    const participant = await ChatParticipant.findOne({
+      where: { chatId, userId, isActive: true }
+    });
+    
+    if (!participant) {
+      return res.status(403).json({ error: 'Not a member of this group' });
+    }
+    
+    // Get encrypted group key for this user
+    const { GroupChatKey } = require('../models');
+    const groupKey = await GroupChatKey.findOne({
+      where: { chatId, userId },
+      order: [['keyVersion', 'DESC']]
+    });
+    
+    if (!groupKey) {
+      return res.status(404).json({ error: 'Group key not found' });
+    }
+    
+    res.json({
+      encryptedGroupKey: groupKey.encryptedGroupKey,
+      keyVersion: groupKey.keyVersion
+    });
+  } catch (error) {
+    console.error('Get group key error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Create group with encrypted keys
+const createGroupWithKeys = async (req, res) => {
+  try {
+    const { name, description, participantIds, encryptedGroupKeys } = req.body;
+    const userId = req.user.id;
+    
+    if (!name || !participantIds || !encryptedGroupKeys) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    
+    // Create group chat
+    const chat = await Chat.create({
+      name,
+      description,
+      isGroup: true,
+      createdBy: userId,
+      lastActivityAt: new Date()
+    });
+    
+    // Add creator as admin
+    await ChatParticipant.create({
+      chatId: chat.id,
+      userId,
+      role: 'admin',
+      isActive: true
+    });
+    
+    // Add other participants
+    for (const participantId of participantIds) {
+      if (participantId !== userId) {
+        await ChatParticipant.create({
+          chatId: chat.id,
+          userId: participantId,
+          role: 'member',
+          isActive: true
+        });
+      }
+    }
+    
+    // Store encrypted group keys for each member
+    const { GroupChatKey } = require('../models');
+    for (const keyData of encryptedGroupKeys) {
+      await GroupChatKey.create({
+        chatId: chat.id,
+        userId: keyData.userId,
+        encryptedGroupKey: keyData.encryptedKey,
+        keyVersion: keyData.keyVersion || 1
+      });
+    }
+    
+    // Fetch complete chat data
+    const completeChat = await Chat.findByPk(chat.id, {
+      include: [{
+        model: User,
+        as: 'participants',
+        attributes: ['id', 'username', 'avatar', 'isOnline', 'publicKey'],
+        through: { where: { isActive: true } }
+      }]
+    });
+    
+    res.status(201).json({ 
+      success: true, 
+      chat: completeChat 
+    });
+  } catch (error) {
+    console.error('Create group with keys error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   createChat,
   getUserChats,
@@ -459,5 +565,7 @@ module.exports = {
   inviteToGroup,
   respondToGroupInvite,
   updateGroupInfo,
-  markMessageAsRead
+  markMessageAsRead,
+  getGroupKey,
+  createGroupWithKeys
 };

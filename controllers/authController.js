@@ -168,10 +168,62 @@ const getUserPublicKey = async (req, res) => {
   }
 };
 
+// Upload/update encryption keys
+const uploadKeys = async (req, res) => {
+  try {
+    const { publicKey, encryptedPrivateKey, keySalt } = req.body;
+    const userId = req.user.id;
+    
+    if (!publicKey || !encryptedPrivateKey || !keySalt) {
+      return res.status(400).json({ error: 'Missing required key data' });
+    }
+    
+    await User.update({
+      publicKey,
+      encryptedPrivateKey,
+      keySalt,
+      keyCreatedAt: new Date()
+    }, { where: { id: userId } });
+    
+    res.json({ 
+      success: true, 
+      message: 'Keys uploaded successfully' 
+    });
+  } catch (error) {
+    console.error('Upload keys error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Get encrypted private key
+const getEncryptedPrivateKey = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findByPk(userId, {
+      attributes: ['encryptedPrivateKey', 'keySalt', 'keyVersion']
+    });
+    
+    if (!user || !user.encryptedPrivateKey) {
+      return res.status(404).json({ error: 'Keys not found' });
+    }
+    
+    res.json({
+      encryptedPrivateKey: user.encryptedPrivateKey,
+      keySalt: user.keySalt,
+      keyVersion: user.keyVersion
+    });
+  } catch (error) {
+    console.error('Get encrypted private key error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   register,
   login,
   logout,
   getProfile,
-  getUserPublicKey
+  getUserPublicKey,
+  uploadKeys,
+  getEncryptedPrivateKey
 };
