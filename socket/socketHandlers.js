@@ -878,6 +878,7 @@ class SocketHandlers {
       const targetSocketId = this.connectedUsers.get(to);
       if (!targetSocketId) {
         console.log(`[CALL ERROR] Receiver ${to} is offline`);
+        console.log('[CALL ERROR] Connected users map keys:', Array.from(this.connectedUsers.keys()));
         socket.emit('call-error', { message: 'User is offline' });
         return;
       }
@@ -914,7 +915,7 @@ class SocketHandlers {
 
       // Store call in Redis for tracking
       const callData = {
-        id: callId,
+        // id: callId,
         callerId: socket.userId,
         receiverId: to,
         callType,

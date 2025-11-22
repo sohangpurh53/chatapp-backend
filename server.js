@@ -70,6 +70,8 @@ const socketHandlers = new SocketHandlers(io);
 
 // Handle socket connections
 io.on('connection', (socket) => {
+  console.log('[SOCKET CONNECT] New connection handshake.auth =', socket.handshake.auth);
+  console.log('[SOCKET CONNECT] Socket id:', socket.id, 'assigned userId:', socket.userId);
   socketHandlers.handleConnection(socket);
 });
 
