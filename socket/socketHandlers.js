@@ -13,7 +13,7 @@ class SocketHandlers {
   }
 
   handleConnection(socket) {
-    console.log(`User ${socket.user.username} connected`);
+    console.log(`User ${socket.user.username} (${socket.userId}) connected with socket ${socket.id}`);
 
     // Store user connection
     this.connectedUsers.set(socket.userId, socket.id);
@@ -24,6 +24,14 @@ class SocketHandlers {
     // Join user to their chat rooms
     this.joinUserChats(socket);
 
+    // Send current online users list to the newly connected user
+    const onlineUserIds = Array.from(this.connectedUsers.keys());
+    socket.emit('online-users-list', {
+      users: onlineUserIds
+    });
+    
+    console.log(`[ONLINE USERS] Total online: ${onlineUserIds.length}`);
+
     // Handle events
     socket.on('join_chat', (data) => this.handleJoinChat(socket, data));
     socket.on('leave_chat', (data) => this.handleLeaveChat(socket, data));
@@ -31,6 +39,7 @@ class SocketHandlers {
     socket.on('typing_start', (data) => this.handleTypingStart(socket, data));
     socket.on('typing_stop', (data) => this.handleTypingStop(socket, data));
     socket.on('message_read', (data) => this.handleMessageRead(socket, data));
+    socket.on('get-online-users', () => this.handleGetOnlineUsers(socket));
     
 
     // socket.on('initiate_call', (data) => this.handleInitiateCall(socket, data));
@@ -368,6 +377,21 @@ class SocketHandlers {
         }
       }
     });
+  }
+
+  handleGetOnlineUsers(socket) {
+    try {
+      // Get all online user IDs from connectedUsers map
+      const onlineUserIds = Array.from(this.connectedUsers.keys());
+      
+      console.log(`[GET ONLINE USERS] Sending ${onlineUserIds.length} online users to ${socket.userId}`);
+      
+      socket.emit('online-users-list', {
+        users: onlineUserIds
+      });
+    } catch (error) {
+      console.error('Error getting online users:', error);
+    }
   }
 
   async updateUserOnlineStatus(userId, isOnline) {

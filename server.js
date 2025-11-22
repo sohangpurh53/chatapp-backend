@@ -41,29 +41,24 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Socket.IO authentication middleware (optional for development)
-if (process.env.NODE_ENV === 'production') {
-  io.use(authenticateSocket);
-} else {
-  // In development, make auth optional for testing
-  io.use(async (socket, next) => {
-    try {
-      if (socket.handshake.auth.token) {
-        await authenticateSocket(socket, next);
-      } else {
-        // Allow connection without auth for testing
-        socket.userId = 'test-user';
-        socket.user = { id: 'test-user', username: 'Test User' };
-        next();
-      }
-    } catch (error) {
-      // Allow connection even if auth fails in development
-      socket.userId = 'test-user';
-      socket.user = { id: 'test-user', username: 'Test User' };
-      next();
+// Socket.IO authentication middleware
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth.token;
+    
+    if (!token) {
+      console.error('[SOCKET AUTH] No token provided');
+      return next(new Error('Authentication token required'));
     }
-  });
-}
+    
+    // Use the authenticateSocket middleware
+    await authenticateSocket(socket, next);
+    console.log(`[SOCKET AUTH] User ${socket.user.username} (${socket.userId}) authenticated`);
+  } catch (error) {
+    console.error('[SOCKET AUTH] Authentication failed:', error.message);
+    next(new Error('Authentication failed'));
+  }
+});
 
 // Initialize socket handlers
 const socketHandlers = new SocketHandlers(io);
