@@ -890,6 +890,7 @@ class SocketHandlers {
       this.io.to(targetSocketId).emit('incoming-call', {
         callId,
         from: socket.userId,
+        to:to,
         callerName: caller.username,
         callerAvatar: caller.avatar,
         callType
