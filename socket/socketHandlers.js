@@ -778,6 +778,42 @@ class SocketHandlers {
     }
   }
 
+  // async endCall(callId, reason = 'normal') {
+  //   try {
+  //     const callData = await redisService.getActiveCall(callId);
+  //     if (!callData) {
+  //       return;
+  //     }
+
+  //     const duration = callData.answeredAt
+  //       ? Math.floor((new Date() - new Date(callData.answeredAt)) / 1000)
+  //       : 0;
+
+  //     // Update database
+  //     await Call.update(
+  //       {
+  //         status: reason === 'missed' ? 'missed' : 'ended',
+  //         endedAt: new Date(),
+  //         duration,
+  //         endReason: reason
+  //       },
+  //       { where: { id: callId } }
+  //     );
+
+  //     // Clean up Redis
+  //     await redisService.deleteActiveCall(callId);
+  //     await redisService.deleteUserCallStatus(callData.callerId);
+  //     await redisService.deleteUserCallStatus(callData.receiverId);
+
+  //     // Clean up memory
+  //     this.activeCalls.delete(callId);
+  //     this.userCalls.delete(callData.callerId);
+  //     this.userCalls.delete(callData.receiverId);
+
+  //   } catch (error) {
+  //     console.error('End call cleanup error:', error);
+  //   }
+  // }
   async endCall(callId, reason = 'normal') {
     try {
       const callData = await redisService.getActiveCall(callId);
@@ -789,13 +825,40 @@ class SocketHandlers {
         ? Math.floor((new Date() - new Date(callData.answeredAt)) / 1000)
         : 0;
 
+      // Map incoming reasons to valid endReason enum values
+      const endReasonMap = {
+        'declined': 'user_ended',
+        'missed': 'no_answer',
+        'normal': 'normal',
+        'ended': 'user_ended',
+        'canceled': 'user_ended',
+        'busy': 'busy',
+        'no_answer': 'no_answer',
+        'network_error': 'network_error',
+        'user_ended': 'user_ended'
+      };
+
+      // Map incoming reasons to valid status enum values
+      const statusMap = {
+        'declined': 'declined',
+        'missed': 'missed',
+        'normal': 'ended',
+        'ended': 'ended',
+        'canceled': 'declined',
+        'busy': 'declined',
+        'no_answer': 'missed'
+      };
+
+      const endReason = endReasonMap[reason] || 'normal';
+      const status = statusMap[reason] || 'ended';
+
       // Update database
       await Call.update(
         {
-          status: reason === 'missed' ? 'missed' : 'ended',
+          status: status,
           endedAt: new Date(),
           duration,
-          endReason: reason
+          endReason: endReason
         },
         { where: { id: callId } }
       );
