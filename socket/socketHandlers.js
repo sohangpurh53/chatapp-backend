@@ -42,15 +42,15 @@ class SocketHandlers {
     socket.on('get-online-users', () => this.handleGetOnlineUsers(socket));
     
 
-    // socket.on('initiate_call', (data) => this.handleInitiateCall(socket, data));
-    // socket.on('answer_call', (data) => this.handleAnswerCall(socket, data));
-    // socket.on('decline_call', (data) => this.handleDeclineCall(socket, data));
-    // socket.on('end_call', (data) => this.handleEndCall(socket, data));
-    // socket.on('call_signal', (data) => this.handleCallSignal(socket, data));
-    // socket.on('toggle_audio', (data) => this.handleToggleAudio(socket, data));
-    // socket.on('toggle_video', (data) => this.handleToggleVideo(socket, data));
-    // socket.on('share_screen', (data) => this.handleShareScreen(socket, data));
-    // socket.on('stop_screen_share', (data) => this.handleStopScreenShare(socket, data));
+    socket.on('initiate_call', (data) => this.handleInitiateCall(socket, data));
+    socket.on('answer_call', (data) => this.handleAnswerCall(socket, data));
+    socket.on('decline_call', (data) => this.handleDeclineCall(socket, data));
+    socket.on('end_call', (data) => this.handleEndCall(socket, data));
+    socket.on('call_signal', (data) => this.handleCallSignal(socket, data));
+    socket.on('toggle_audio', (data) => this.handleToggleAudio(socket, data));
+    socket.on('toggle_video', (data) => this.handleToggleVideo(socket, data));
+    socket.on('share_screen', (data) => this.handleShareScreen(socket, data));
+    socket.on('stop_screen_share', (data) => this.handleStopScreenShare(socket, data));
 
     // WebRTC Signaling events (for SignalingService)
     socket.on('join-room', (data) => this.handleJoinRoom(socket, data));
