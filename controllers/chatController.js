@@ -61,28 +61,36 @@ const createChat = async (req, res) => {
 
     const chat = await Chat.create(chatData);
 
-    // Add creator as participant
+    // Add creator as participant (admin for groups)
     await ChatParticipant.create({
       userId,
       chatId: chat.id,
-      role: isGroup ? 'admin' : 'member'
+      role: isGroup ? 'admin' : 'member',
+      isActive: true
     });
 
     // Add other participants
     for (const participantId of participantIds) {
-      await ChatParticipant.create({
-        userId: participantId,
-        chatId: chat.id,
-        role: 'member'
-      });
+      // Skip if participant is the creator (avoid duplicates)
+      if (participantId !== userId) {
+        await ChatParticipant.create({
+          userId: participantId,
+          chatId: chat.id,
+          role: 'member',
+          isActive: true
+        });
+      }
     }
 
-    // Fetch complete chat data
+    // Fetch complete chat data with all participants
     const includeOptions = [{
       model: User,
       as: 'participants',
       attributes: ['id', 'username', 'avatar', 'isOnline'],
-      through: { where: { isActive: true } }
+      through: { 
+        where: { isActive: true },
+        attributes: ['role', 'joinedAt']
+      }
     }];
 
     if (!isGroup) {
@@ -104,6 +112,8 @@ const createChat = async (req, res) => {
       include: includeOptions
     });
 
+    console.log(`Created chat ${chat.id} with ${completeChat.participants?.length || 0} participants`);
+
     res.status(201).json({ chat: completeChat });
   } catch (error) {
     console.error('Create chat error:', error);
@@ -123,7 +133,7 @@ const getUserChats = async (req, res) => {
           attributes: ['id', 'username', 'avatar', 'isOnline'],
           through: {
             where: { isActive: true },
-            attributes: []
+            attributes: ['role', 'joinedAt']
           },
           required: true
         },
@@ -157,6 +167,11 @@ const getUserChats = async (req, res) => {
       },
       order: [['lastActivityAt', 'DESC']],
       distinct: true
+    });
+
+    // Log participant counts for debugging
+    chats.forEach(chat => {
+      console.log(`Chat ${chat.id} (${chat.name || 'Direct'}): ${chat.participants?.length || 0} participants`);
     });
 
     res.json({ chats });
