@@ -125,7 +125,26 @@ const getUserChats = async (req, res) => {
   try {
     const userId = req.user.id;
 
+    // First, get all chat IDs where user is a participant
+    const userParticipations = await ChatParticipant.findAll({
+      where: {
+        userId,
+        isActive: true
+      },
+      attributes: ['chatId']
+    });
+
+    const chatIds = userParticipations.map(p => p.chatId);
+
+    if (chatIds.length === 0) {
+      return res.json({ chats: [] });
+    }
+
+    // Then fetch all chats with ALL their participants
     const chats = await Chat.findAll({
+      where: {
+        id: { [Op.in]: chatIds }
+      },
       include: [
         {
           model: User,
@@ -135,7 +154,7 @@ const getUserChats = async (req, res) => {
             where: { isActive: true },
             attributes: ['role', 'joinedAt']
           },
-          required: true
+          required: false
         },
         {
           model: User,
@@ -162,9 +181,6 @@ const getUserChats = async (req, res) => {
           }]
         }
       ],
-      where: {
-        '$participants.id$': userId
-      },
       order: [['lastActivityAt', 'DESC']],
       distinct: true
     });
@@ -172,7 +188,14 @@ const getUserChats = async (req, res) => {
     // Log participant counts for debugging
     chats.forEach(chat => {
       console.log(`Chat ${chat.id} (${chat.name || 'Direct'}): ${chat.participants?.length || 0} participants`);
+      if (chat.isGroup && chat.participants) {
+        chat.participants.forEach(p => {
+          console.log(`  - ${p.username} (${p.id}) - Role: ${p.ChatParticipant?.role || 'N/A'}`);
+        });
+      }
     });
+
+    console.log(`Returning ${chats.length} chats to user ${userId}`);
 
     res.json({ chats });
   } catch (error) {
@@ -413,7 +436,25 @@ const updateGroupInfo = async (req, res) => {
       avatar: avatar !== undefined ? avatar : chat.avatar
     });
 
-    res.json({ chat });
+    // Fetch updated chat with participants
+    const updatedChat = await Chat.findByPk(chatId, {
+      include: [{
+        model: User,
+        as: 'participants',
+        attributes: ['id', 'username', 'avatar', 'isOnline'],
+        through: { 
+          where: { isActive: true },
+          attributes: ['role', 'joinedAt']
+        }
+      }]
+    });
+
+    console.log(`Updated group ${chatId}: ${updatedChat.name}`);
+
+    res.json({ 
+      success: true,
+      chat: updatedChat 
+    });
   } catch (error) {
     console.error('Update group info error:', error);
     res.status(500).json({ error: 'Internal server error' });
