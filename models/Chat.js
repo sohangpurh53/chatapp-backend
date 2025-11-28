@@ -69,6 +69,11 @@ const Chat = sequelize.define('Chat', {
   isArchived: {
     type: DataTypes.BOOLEAN,
     defaultValue: false
+  },
+  // Active status (for soft delete)
+  isActive: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
   }
 }, {
   indexes: [

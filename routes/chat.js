@@ -31,4 +31,9 @@ router.post('/messages/:messageId/read', authenticateToken, markMessageAsRead);
 router.get('/:chatId/group-key', authenticateToken, getGroupKey);
 router.post('/create-group-with-keys', authenticateToken, createGroupWithKeys);
 
+// Delete operations
+router.delete('/messages/:messageId', authenticateToken, require('../controllers/chatController').deleteMessage);
+router.delete('/:chatId', authenticateToken, require('../controllers/chatController').deleteChat);
+router.delete('/:chatId/leave', authenticateToken, require('../controllers/chatController').leaveGroup);
+
 module.exports = router;

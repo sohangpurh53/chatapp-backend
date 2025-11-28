@@ -10,3 +10,4 @@ package-lock.json
 yarnlock.json
 .env
 .env.prod
+notification_plan.md

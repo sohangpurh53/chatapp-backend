@@ -66,6 +66,22 @@ const Message = sequelize.define('Message', {
     type: DataTypes.DATE,
     allowNull: true
   },
+  isDeleted: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  deletedAt: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  deletedBy: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: 'Users',
+      key: 'id'
+    }
+  },
   senderId: {
     type: DataTypes.UUID,
     allowNull: false,

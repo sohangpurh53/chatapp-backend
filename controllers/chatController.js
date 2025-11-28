@@ -140,10 +140,11 @@ const getUserChats = async (req, res) => {
       return res.json({ chats: [] });
     }
 
-    // Then fetch all chats with ALL their participants
+    // Then fetch all chats with ALL their participants (only active chats)
     const chats = await Chat.findAll({
       where: {
-        id: { [Op.in]: chatIds }
+        id: { [Op.in]: chatIds },
+        isActive: true
       },
       include: [
         {
@@ -613,6 +614,190 @@ const createGroupWithKeys = async (req, res) => {
   }
 };
 
+// Delete message (for everyone or just for me)
+const deleteMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { deleteForEveryone = false } = req.body;
+    const userId = req.user.id;
+
+    const message = await Message.findByPk(messageId);
+    if (!message) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    // Verify user is participant in the chat
+    const participant = await ChatParticipant.findOne({
+      where: {
+        userId,
+        chatId: message.chatId,
+        isActive: true
+      }
+    });
+
+    if (!participant) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (deleteForEveryone) {
+      // Only sender can delete for everyone
+      if (message.senderId !== userId) {
+        return res.status(403).json({ error: 'Only sender can delete message for everyone' });
+      }
+
+      // Check if message is within 1 hour (optional time limit)
+      const messageAge = Date.now() - new Date(message.createdAt).getTime();
+      const oneHour = 60 * 60 * 1000;
+      
+      if (messageAge > oneHour) {
+        return res.status(400).json({ error: 'Cannot delete messages older than 1 hour for everyone' });
+      }
+
+      // Mark message as deleted
+      await message.update({
+        content: 'This message was deleted',
+        isDeleted: true,
+        deletedAt: new Date(),
+        deletedBy: userId
+      });
+
+      console.log(`Message ${messageId} deleted for everyone by user ${userId}`);
+    } else {
+      // Delete for me - we could implement a separate table for this
+      // For now, just return success
+      console.log(`Message ${messageId} deleted for user ${userId}`);
+    }
+
+    res.json({ success: true, deleteForEveryone });
+  } catch (error) {
+    console.error('Delete message error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Delete chat (for direct chats) or leave group
+const deleteChat = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.user.id;
+
+    const chat = await Chat.findByPk(chatId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    // Verify user is participant
+    const participant = await ChatParticipant.findOne({
+      where: {
+        userId,
+        chatId,
+        isActive: true
+      }
+    });
+
+    if (!participant) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (chat.isGroup) {
+      // For groups, check if user is admin
+      if (participant.role !== 'admin') {
+        return res.status(403).json({ error: 'Only admins can delete groups' });
+      }
+
+      // Delete the entire group
+      await ChatParticipant.update(
+        { isActive: false },
+        { where: { chatId } }
+      );
+
+      await chat.update({ isActive: false });
+
+      console.log(`Group ${chatId} deleted by admin ${userId}`);
+    } else {
+      // For direct chats, just mark participant as inactive
+      await participant.update({ isActive: false });
+
+      // Check if both participants have left
+      const activeParticipants = await ChatParticipant.count({
+        where: { chatId, isActive: true }
+      });
+
+      if (activeParticipants === 0) {
+        await chat.update({ isActive: false });
+      }
+
+      console.log(`User ${userId} left chat ${chatId}`);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete chat error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Leave group (for non-admin members)
+const leaveGroup = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.user.id;
+
+    const chat = await Chat.findByPk(chatId);
+    if (!chat || !chat.isGroup) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    const participant = await ChatParticipant.findOne({
+      where: {
+        userId,
+        chatId,
+        isActive: true
+      }
+    });
+
+    if (!participant) {
+      return res.status(403).json({ error: 'Not a member of this group' });
+    }
+
+    // Mark participant as inactive
+    await participant.update({ isActive: false });
+
+    // If user was admin, check if there are other admins
+    if (participant.role === 'admin') {
+      const otherAdmins = await ChatParticipant.count({
+        where: {
+          chatId,
+          isActive: true,
+          role: 'admin'
+        }
+      });
+
+      // If no other admins, promote the first active member
+      if (otherAdmins === 0) {
+        const firstMember = await ChatParticipant.findOne({
+          where: {
+            chatId,
+            isActive: true
+          },
+          order: [['joinedAt', 'ASC']]
+        });
+
+        if (firstMember) {
+          await firstMember.update({ role: 'admin' });
+          console.log(`Promoted user ${firstMember.userId} to admin in group ${chatId}`);
+        }
+      }
+    }
+
+    console.log(`User ${userId} left group ${chatId}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Leave group error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   createChat,
   getUserChats,
@@ -623,5 +808,8 @@ module.exports = {
   updateGroupInfo,
   markMessageAsRead,
   getGroupKey,
-  createGroupWithKeys
+  createGroupWithKeys,
+  deleteMessage,
+  deleteChat,
+  leaveGroup
 };
