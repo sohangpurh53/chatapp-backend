@@ -33,6 +33,7 @@ router.post('/create-group-with-keys', authenticateToken, createGroupWithKeys);
 
 // Delete operations
 router.delete('/messages/:messageId', authenticateToken, require('../controllers/chatController').deleteMessage);
+router.post('/messages/bulk-delete', authenticateToken, require('../controllers/chatController').bulkDeleteMessages);
 router.delete('/:chatId', authenticateToken, require('../controllers/chatController').deleteChat);
 router.delete('/:chatId/leave', authenticateToken, require('../controllers/chatController').leaveGroup);
 

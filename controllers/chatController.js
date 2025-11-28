@@ -1,4 +1,4 @@
-const { Chat, User, Message, ChatParticipant, MessageReceipt, GroupInvite } = require('../models');
+const { Chat, User, Message, ChatParticipant, MessageReceipt, GroupInvite, UserMessageDeletion } = require('../models');
 const { Op } = require('sequelize');
 
 const createChat = async (req, res) => {
@@ -210,11 +210,12 @@ const getChatMessages = async (req, res) => {
     const { chatId } = req.params;
     const { page = 1, limit = 50 } = req.query;
     const offset = (page - 1) * limit;
+    const userId = req.user.id;
 
     // Verify user is participant
     const participant = await ChatParticipant.findOne({
       where: {
-        userId: req.user.id,
+        userId,
         chatId,
         isActive: true
       }
@@ -224,8 +225,19 @@ const getChatMessages = async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
+    // Get messages deleted by this user
+    const userDeletedMessages = await UserMessageDeletion.findAll({
+      where: { userId },
+      attributes: ['messageId']
+    });
+    const deletedMessageIds = userDeletedMessages.map(d => d.messageId);
+
     const messages = await Message.findAll({
-      where: { chatId },
+      where: { 
+        chatId,
+        // Exclude messages deleted by this user
+        id: { [Op.notIn]: deletedMessageIds }
+      },
       include: [
         {
           model: User,
@@ -663,14 +675,129 @@ const deleteMessage = async (req, res) => {
 
       console.log(`Message ${messageId} deleted for everyone by user ${userId}`);
     } else {
-      // Delete for me - we could implement a separate table for this
-      // For now, just return success
+      // Delete for me - add to UserMessageDeletion table
+      await UserMessageDeletion.findOrCreate({
+        where: {
+          userId,
+          messageId
+        },
+        defaults: {
+          deletedAt: new Date()
+        }
+      });
+
       console.log(`Message ${messageId} deleted for user ${userId}`);
     }
 
     res.json({ success: true, deleteForEveryone });
   } catch (error) {
     console.error('Delete message error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Bulk delete messages
+const bulkDeleteMessages = async (req, res) => {
+  try {
+    const { messageIds, deleteForEveryone = false } = req.body;
+    const userId = req.user.id;
+
+    if (!messageIds || !Array.isArray(messageIds) || messageIds.length === 0) {
+      return res.status(400).json({ error: 'Message IDs are required' });
+    }
+
+    // Limit bulk operations to prevent abuse
+    if (messageIds.length > 100) {
+      return res.status(400).json({ error: 'Cannot delete more than 100 messages at once' });
+    }
+
+    // Fetch all messages
+    const messages = await Message.findAll({
+      where: {
+        id: { [Op.in]: messageIds }
+      }
+    });
+
+    if (messages.length === 0) {
+      return res.status(404).json({ error: 'No messages found' });
+    }
+
+    // Verify user is participant in all chats
+    const chatIds = [...new Set(messages.map(m => m.chatId))];
+    const participations = await ChatParticipant.findAll({
+      where: {
+        userId,
+        chatId: { [Op.in]: chatIds },
+        isActive: true
+      }
+    });
+
+    if (participations.length !== chatIds.length) {
+      return res.status(403).json({ error: 'Access denied to some messages' });
+    }
+
+    let deletedCount = 0;
+    let failedCount = 0;
+    const errors = [];
+
+    if (deleteForEveryone) {
+      // Delete for everyone - only for messages sent by user and within time limit
+      const oneHour = 60 * 60 * 1000;
+      const now = Date.now();
+
+      for (const message of messages) {
+        // Check if user is sender
+        if (message.senderId !== userId) {
+          failedCount++;
+          errors.push(`Message ${message.id}: Only sender can delete for everyone`);
+          continue;
+        }
+
+        // Check time limit
+        const messageAge = now - new Date(message.createdAt).getTime();
+        if (messageAge > oneHour) {
+          failedCount++;
+          errors.push(`Message ${message.id}: Cannot delete messages older than 1 hour`);
+          continue;
+        }
+
+        // Delete message
+        await message.update({
+          content: 'This message was deleted',
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedBy: userId
+        });
+        deletedCount++;
+      }
+
+      console.log(`Bulk deleted ${deletedCount} messages for everyone by user ${userId}`);
+    } else {
+      // Delete for me - add all to UserMessageDeletion table
+      const deletions = messageIds.map(messageId => ({
+        userId,
+        messageId,
+        deletedAt: new Date()
+      }));
+
+      // Use bulkCreate with ignoreDuplicates to handle already deleted messages
+      const result = await UserMessageDeletion.bulkCreate(deletions, {
+        ignoreDuplicates: true
+      });
+
+      deletedCount = result.length;
+      console.log(`Bulk deleted ${deletedCount} messages for user ${userId}`);
+    }
+
+    res.json({ 
+      success: true, 
+      deleteForEveryone,
+      deletedCount,
+      failedCount,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('Bulk delete messages error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -810,6 +937,7 @@ module.exports = {
   getGroupKey,
   createGroupWithKeys,
   deleteMessage,
+  bulkDeleteMessages,
   deleteChat,
   leaveGroup
 };
