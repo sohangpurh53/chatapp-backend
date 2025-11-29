@@ -3,8 +3,6 @@ const path = require('path');
 require('dotenv').config();
 const fcmPath = require('../utils/helper');
 
-let messaging = null;
-
 async function setupFirebase() {
   try {
     const fcmserviceAccountURL = process.env.FCM_SERVICE_ACCOUNT_URL;
@@ -22,25 +20,30 @@ async function setupFirebase() {
       const localPath = path.join(__dirname, '../chatapp-488b1-firebase-adminsdk-fbsvc-ea441981de.json');
       serviceAccount = require(localPath);
     }
-  console.log("service account....>>>>>>>>>>>>>", Object.keys(serviceAccount))
+
     // initialize firebase
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
       projectId: process.env.FIREBASE_PROJECT_ID,
     });
 
-    messaging = admin.messaging();
-
-    console.warn("⚠️ this is messaging", messaging)
     console.log("✅ Firebase Admin initialized");
-
+    return admin.messaging();
 
   } catch (error) {
     console.warn("⚠️ Firebase Admin not initialized:", error.message);
-    console.warn("⚠️ Firebase Admin not initialized:", error);
+    return null;
   }
 }
 
-setupFirebase();
+// Initialize and export as a getter function
+let messagingInstance = null;
+const messagingPromise = setupFirebase().then(instance => {
+  messagingInstance = instance;
+  return instance;
+});
 
-module.exports = { admin, messaging };
+// Export getter function that returns the messaging instance
+const getMessaging = () => messagingInstance;
+
+module.exports = { admin, getMessaging, messagingPromise };
