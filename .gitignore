@@ -11,3 +11,7 @@ yarnlock.json
 .env
 .env.prod
 notification_plan.md
+
+# Firebase
+firebase-service-account.json
+chatapp-488b1-firebase-adminsdk-fbsvc-ea441981de.json

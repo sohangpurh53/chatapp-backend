@@ -57,6 +57,25 @@ const User = sequelize.define('User', {
   keyCreatedAt: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  // FCM Push Notification fields
+  fcmToken: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  fcmTokenUpdatedAt: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  notificationPreferences: {
+    type: DataTypes.JSON,
+    defaultValue: {
+      calls: true,
+      messages: true,
+      groupMessages: true,
+      soundEnabled: true,
+      vibrationEnabled: true
+    }
   }
 }, {
   hooks: {

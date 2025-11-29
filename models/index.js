@@ -8,6 +8,7 @@ const MessageReceipt = require('./MessageReceipt');
 const GroupInvite = require('./GroupInvite');
 const GroupChatKey = require('./GroupChatKey');
 const UserMessageDeletion = require('./UserMessageDeletion');
+const Notification = require('./Notification');
 
 // User associations
 User.hasMany(Message, { foreignKey: 'senderId', as: 'sentMessages' });
@@ -87,6 +88,10 @@ UserMessageDeletion.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 Message.hasMany(UserMessageDeletion, { foreignKey: 'messageId', as: 'userDeletions' });
 UserMessageDeletion.belongsTo(Message, { foreignKey: 'messageId', as: 'message' });
 
+// Notification associations
+User.hasMany(Notification, { foreignKey: 'userId', as: 'notifications' });
+Notification.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
 module.exports = {
   sequelize,
   User,
@@ -97,5 +102,6 @@ module.exports = {
   MessageReceipt,
   GroupInvite,
   GroupChatKey,
-  UserMessageDeletion
+  UserMessageDeletion,
+  Notification
 };

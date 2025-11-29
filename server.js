@@ -9,10 +9,17 @@ const { authenticateSocket } = require('./middleware/auth');
 const SocketHandlers = require('./socket/socketHandlers');
 const redisService = require('./config/redis');
 
+// Bull Board for queue monitoring
+const { createBullBoard } = require('@bull-board/api');
+const { BullMQAdapter } = require('@bull-board/api/bullMQAdapter');
+const { ExpressAdapter } = require('@bull-board/express');
+const { notificationQueue } = require('./config/queue');
+
 // Import routes
 const authRoutes = require('./routes/auth');
 const chatRoutes = require('./routes/chat');
 const callRoutes = require('./routes/calls');
+const notificationRoutes = require('./routes/notifications');
 
 const app = express();
 const server = http.createServer(app);
@@ -31,10 +38,22 @@ app.use(express.urlencoded({ extended: true }));
 // Serve static files for testing
 app.use(express.static('public'));
 
+// Setup Bull Board Dashboard
+const serverAdapter = new ExpressAdapter();
+serverAdapter.setBasePath('/admin/queues');
+
+createBullBoard({
+  queues: [new BullMQAdapter(notificationQueue)],
+  serverAdapter: serverAdapter,
+});
+
+app.use('/admin/queues', serverAdapter.getRouter());
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/calls', callRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -83,6 +102,15 @@ async function startServer() {
     await sequelize.sync({ alter: true });
     console.log('Database models synchronized.');
 
+    // Start notification worker in production
+    if (process.env.NODE_ENV === 'production') {
+      console.log('🚀 Starting notification worker in production mode...');
+      require('./workers/notificationWorker');
+    } else {
+      console.log('ℹ️  Notification worker not started (development mode)');
+      console.log('ℹ️  To start worker manually: npm run start:worker');
+    }
+
     // Start server
     server.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
@@ -91,6 +119,8 @@ async function startServer() {
       console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
       console.log(`🧪 Socket Test Page: http://localhost:${PORT}/socket-test.html`);
       console.log(`❤️  Health Check: http://localhost:${PORT}/api/health`);
+      console.log(`📬 Notifications: http://localhost:${PORT}/api/notifications`);
+      console.log(`📊 Queue Dashboard: http://localhost:${PORT}/admin/queues`);
     });
   } catch (error) {
     console.error('Unable to start server:', error);

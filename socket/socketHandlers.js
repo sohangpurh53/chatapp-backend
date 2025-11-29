@@ -2,6 +2,7 @@ const { Message, User, Chat, ChatParticipant, Call, MessageReceipt } = require('
 const { Op } = require('sequelize');
 const redisService = require('../config/redis');
 const { v4: uuidv4 } = require('uuid');
+const notificationService = require('../services/notificationService');
 
 class SocketHandlers {
   constructor(io) {
@@ -248,6 +249,43 @@ class SocketHandlers {
       // Emit to all participants in the chat
       this.io.to(`chat_${chatId}`).emit('new_message', completeMessage);
 
+      // Send push notification to offline users
+      if (!chat.isGroup) {
+        // Direct message - check if receiver is online
+        const isReceiverOnline = this.connectedUsers.has(receiverId);
+        if (!isReceiverOnline) {
+          await notificationService.notifyNewMessage({
+            messageId: message.id,
+            senderId: socket.userId,
+            receiverId,
+            chatId,
+            content,
+            isEncrypted,
+            messageType
+          });
+        }
+      } else {
+        // Group message - notify offline participants
+        const onlineUsers = Array.from(this.connectedUsers.keys());
+        const offlineParticipants = participants
+          .map(p => p.userId)
+          .filter(id => !onlineUsers.includes(id) && id !== socket.userId);
+
+        if (offlineParticipants.length > 0) {
+          await notificationService.notifyGroupMessage(
+            {
+              messageId: message.id,
+              senderId: socket.userId,
+              chatId,
+              content,
+              isEncrypted,
+              messageType
+            },
+            offlineParticipants
+          );
+        }
+      }
+
     } catch (error) {
       console.error('Send message error:', error);
       socket.emit('error', { message: 'Failed to send message' });
@@ -491,6 +529,14 @@ class SocketHandlers {
         callType,
         chatId,
         receiverId
+      });
+
+      // Send push notification (will only send if receiver is offline or app in background)
+      await notificationService.notifyIncomingCall({
+        callId,
+        callerId: socket.userId,
+        receiverId,
+        callType
       });
 
       // Confirm to caller and store call reference
@@ -773,6 +819,14 @@ class SocketHandlers {
         this.io.to(callerSocketId).emit('call_missed', { callId });
       }
 
+      // Send push notification for missed call
+      await notificationService.notifyMissedCall({
+        callId,
+        callerId: callData.callerId,
+        receiverId: callData.receiverId,
+        callType: callData.callType
+      });
+
     } catch (error) {
       console.error('Handle missed call error:', error);
     }
@@ -1035,6 +1089,14 @@ class SocketHandlers {
     });
 
     console.log(`[CALL SENT] Incoming call notification sent to user ${to} on socket ${targetSocketId}`);
+
+    // Send push notification (will only send if receiver is offline or app in background)
+    await notificationService.notifyIncomingCall({
+      callId,
+      callerId: socket.userId,
+      receiverId: to,
+      callType
+    });
 
     // Confirm to caller
     socket.emit('call-initiated', {
