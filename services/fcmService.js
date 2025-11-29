@@ -89,6 +89,22 @@ class FCMService {
         return { success: false, reason: 'disabled_by_user' };
       }
 
+      // Prepare data payload - all values must be strings
+      const dataPayload = {
+        type: notification.type,
+        timestamp: new Date().toISOString()
+      };
+
+      // Convert notification.data to strings
+      if (notification.data) {
+        Object.keys(notification.data).forEach(key => {
+          const value = notification.data[key];
+          if (value !== null && value !== undefined) {
+            dataPayload[key] = typeof value === 'string' ? value : JSON.stringify(value);
+          }
+        });
+      }
+
       // Prepare FCM message
       const message = {
         token: user.fcmToken,
@@ -96,11 +112,7 @@ class FCMService {
           title: notification.title,
           body: notification.body
         },
-        data: {
-          ...(notification.data || {}),
-          type: notification.type,
-          timestamp: new Date().toISOString()
-        },
+        data: dataPayload,
         android: {
           priority: notification.priority || 'high',
           notification: {
