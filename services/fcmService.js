@@ -45,6 +45,7 @@ class FCMService {
   async sendNotification(userId, notification) {
     try {
       // Check if Firebase messaging is available
+      console.log("tracking one here is messaging....", messaging)
       if (!messaging) {
         console.warn(`⚠️  Firebase not configured - skipping notification for user ${userId}`);
         await Notification.update(
