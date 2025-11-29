@@ -1,32 +1,42 @@
 const admin = require('firebase-admin');
 const path = require('path');
+require('dotenv').config();
+const fcmPath = require('../utils/helper');
 
 let messaging = null;
 
-try {
-  // Check if Firebase service account file exists
-  const serviceAccountPath = path.join(__dirname, '../chatapp-488b1-firebase-adminsdk-fbsvc-ea441981de.json');
-  
-  // Try to load service account
-  const serviceAccount = require(serviceAccountPath);
-  
-  // Initialize Firebase Admin SDK
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    projectId: process.env.FIREBASE_PROJECT_ID
-  });
-  
-  messaging = admin.messaging();
-  
-  console.log('✅ Firebase Admin SDK initialized successfully');
-} catch (error) {
-  console.warn('⚠️  Firebase Admin SDK not initialized:', error.message);
-  console.warn('⚠️  Push notifications will not work until Firebase is configured');
-  console.warn('⚠️  To enable push notifications:');
-  console.warn('   1. Download firebase-service-account.json from Firebase Console');
-  console.warn('   2. Place it in backend/ directory');
-  console.warn('   3. Set FIREBASE_PROJECT_ID in .env file');
-  console.warn('   4. Restart the server');
+async function setupFirebase() {
+  try {
+    const fcmserviceAccountURL = process.env.FCM_SERVICE_ACCOUNT_URL;
+
+    let serviceAccount = null;
+
+    if (fcmserviceAccountURL) {
+      // fetch JSON from URL
+      serviceAccount = await fcmPath(fcmserviceAccountURL);
+      
+    }
+
+    // fallback to local file if fetch failed
+    if (!serviceAccount) {
+      const localPath = path.join(__dirname, '../chatapp-488b1-firebase-adminsdk-fbsvc-ea441981de.json');
+      serviceAccount = require(localPath);
+    }
+
+    // initialize firebase
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId: process.env.FIREBASE_PROJECT_ID,
+    });
+
+    messaging = admin.messaging();
+    console.log("✅ Firebase Admin initialized");
+
+  } catch (error) {
+    console.warn("⚠️ Firebase Admin not initialized:", error.message);
+  }
 }
+
+setupFirebase();
 
 module.exports = { admin, messaging };

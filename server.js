@@ -20,6 +20,7 @@ const authRoutes = require('./routes/auth');
 const chatRoutes = require('./routes/chat');
 const callRoutes = require('./routes/calls');
 const notificationRoutes = require('./routes/notifications');
+const mediaRoutes = require('./routes/media');
 
 const app = express();
 const server = http.createServer(app);
@@ -54,6 +55,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/calls', callRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/media', mediaRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -102,6 +104,10 @@ async function startServer() {
     await sequelize.sync({ alter: true });
     console.log('Database models synchronized.');
 
+    // Initialize MinIO bucket
+    const { initializeBucket } = require('./config/minio');
+    await initializeBucket();
+
     // Start notification worker in production
     if (process.env.NODE_ENV === 'production') {
       console.log('🚀 Starting notification worker in production mode...');
@@ -121,6 +127,8 @@ async function startServer() {
       console.log(`❤️  Health Check: http://localhost:${PORT}/api/health`);
       console.log(`📬 Notifications: http://localhost:${PORT}/api/notifications`);
       console.log(`📊 Queue Dashboard: http://localhost:${PORT}/admin/queues`);
+      console.log(`📁 Media Upload: http://localhost:${PORT}/api/media/upload`);
+      console.log(`🏥 MinIO Health: http://localhost:${PORT}/api/media/health`);
     });
   } catch (error) {
     console.error('Unable to start server:', error);
