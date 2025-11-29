@@ -22,7 +22,7 @@ async function setupFirebase() {
       const localPath = path.join(__dirname, '../chatapp-488b1-firebase-adminsdk-fbsvc-ea441981de.json');
       serviceAccount = require(localPath);
     }
-
+  console.log("service account....>>>>>>>>>>>>>", Object.keys(serviceAccount))
     // initialize firebase
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
