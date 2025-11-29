@@ -30,10 +30,14 @@ async function setupFirebase() {
     });
 
     messaging = admin.messaging();
+
+    console.warn("⚠️ this is messaging", messaging)
     console.log("✅ Firebase Admin initialized");
+
 
   } catch (error) {
     console.warn("⚠️ Firebase Admin not initialized:", error.message);
+    console.warn("⚠️ Firebase Admin not initialized:", error);
   }
 }
 
