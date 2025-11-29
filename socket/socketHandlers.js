@@ -40,6 +40,8 @@ class SocketHandlers {
     socket.on('typing_start', (data) => this.handleTypingStart(socket, data));
     socket.on('typing_stop', (data) => this.handleTypingStop(socket, data));
     socket.on('message_read', (data) => this.handleMessageRead(socket, data));
+    socket.on('delete_message', (data) => this.handleDeleteMessage(socket, data));
+    socket.on('bulk_delete_messages', (data) => this.handleBulkDeleteMessages(socket, data));
     socket.on('get-online-users', () => this.handleGetOnlineUsers(socket));
     
 
@@ -365,6 +367,218 @@ class SocketHandlers {
 
     } catch (error) {
       console.error('Message read error:', error);
+    }
+  }
+
+  async handleDeleteMessage(socket, data) {
+    try {
+      const { messageId, deleteForEveryone = false } = data;
+      const userId = socket.userId;
+
+      const message = await Message.findByPk(messageId);
+      if (!message) {
+        socket.emit('error', { message: 'Message not found' });
+        return;
+      }
+
+      // Verify user is participant in the chat
+      const participant = await ChatParticipant.findOne({
+        where: {
+          userId,
+          chatId: message.chatId,
+          isActive: true
+        }
+      });
+
+      if (!participant) {
+        socket.emit('error', { message: 'Access denied' });
+        return;
+      }
+
+      if (deleteForEveryone) {
+        // Only sender can delete for everyone
+        if (message.senderId !== userId) {
+          socket.emit('error', { message: 'Only sender can delete message for everyone' });
+          return;
+        }
+
+        // Check if message is within 1 hour (optional time limit)
+        const messageAge = Date.now() - new Date(message.createdAt).getTime();
+        const oneHour = 60 * 60 * 1000;
+        
+        if (messageAge > oneHour) {
+          socket.emit('error', { message: 'Cannot delete messages older than 1 hour for everyone' });
+          return;
+        }
+
+        // Mark message as deleted
+        await message.update({
+          content: 'This message was deleted',
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedBy: userId
+        });
+
+        // Emit to all participants in the chat (including sender)
+        this.io.to(`chat_${message.chatId}`).emit('message_deleted', {
+          messageId,
+          chatId: message.chatId,
+          deletedBy: userId,
+          deleteForEveryone: true
+        });
+
+        console.log(`Message ${messageId} deleted for everyone by user ${userId}`);
+      } else {
+        // Delete for me - add to UserMessageDeletion table
+        const { UserMessageDeletion } = require('../models');
+        
+        await UserMessageDeletion.findOrCreate({
+          where: {
+            userId,
+            messageId
+          },
+          defaults: {
+            deletedAt: new Date()
+          }
+        });
+
+        // Only notify the user who deleted it
+        socket.emit('message_deleted', {
+          messageId,
+          chatId: message.chatId,
+          deletedBy: userId,
+          deleteForEveryone: false
+        });
+
+        console.log(`Message ${messageId} deleted for user ${userId}`);
+      }
+
+    } catch (error) {
+      console.error('Delete message error:', error);
+      socket.emit('error', { message: 'Failed to delete message' });
+    }
+  }
+
+  async handleBulkDeleteMessages(socket, data) {
+    try {
+      const { messageIds, deleteForEveryone = false } = data;
+      const userId = socket.userId;
+
+      if (!messageIds || messageIds.length === 0) {
+        socket.emit('error', { message: 'No messages specified' });
+        return;
+      }
+
+      if (messageIds.length > 100) {
+        socket.emit('error', { message: 'Cannot delete more than 100 messages at once' });
+        return;
+      }
+
+      const messages = await Message.findAll({
+        where: { id: { [Op.in]: messageIds } }
+      });
+
+      if (messages.length === 0) {
+        socket.emit('error', { message: 'No messages found' });
+        return;
+      }
+
+      // Get unique chat IDs
+      const chatIds = [...new Set(messages.map(m => m.chatId))];
+
+      // Verify user is participant in all chats
+      const participations = await ChatParticipant.findAll({
+        where: {
+          userId,
+          chatId: { [Op.in]: chatIds },
+          isActive: true
+        }
+      });
+
+      if (participations.length !== chatIds.length) {
+        socket.emit('error', { message: 'Access denied to some messages' });
+        return;
+      }
+
+      let deletedCount = 0;
+      let failedCount = 0;
+
+      if (deleteForEveryone) {
+        const oneHour = 60 * 60 * 1000;
+        const now = Date.now();
+
+        for (const message of messages) {
+          // Check if user is sender
+          if (message.senderId !== userId) {
+            failedCount++;
+            continue;
+          }
+
+          // Check time limit
+          const messageAge = now - new Date(message.createdAt).getTime();
+          if (messageAge > oneHour) {
+            failedCount++;
+            continue;
+          }
+
+          // Delete message
+          await message.update({
+            content: 'This message was deleted',
+            isDeleted: true,
+            deletedAt: new Date(),
+            deletedBy: userId
+          });
+
+          // Emit to all participants
+          this.io.to(`chat_${message.chatId}`).emit('message_deleted', {
+            messageId: message.id,
+            chatId: message.chatId,
+            deletedBy: userId,
+            deleteForEveryone: true
+          });
+
+          deletedCount++;
+        }
+
+        console.log(`Bulk deleted ${deletedCount} messages for everyone by user ${userId}`);
+      } else {
+        // Delete for me
+        const { UserMessageDeletion } = require('../models');
+        const deletions = messageIds.map(messageId => ({
+          userId,
+          messageId,
+          deletedAt: new Date()
+        }));
+
+        const result = await UserMessageDeletion.bulkCreate(deletions, {
+          ignoreDuplicates: true
+        });
+
+        deletedCount = result.length;
+
+        // Notify only the user
+        for (const message of messages) {
+          socket.emit('message_deleted', {
+            messageId: message.id,
+            chatId: message.chatId,
+            deletedBy: userId,
+            deleteForEveryone: false
+          });
+        }
+
+        console.log(`Bulk deleted ${deletedCount} messages for user ${userId}`);
+      }
+
+      // Send result back to client
+      socket.emit('bulk_delete_result', {
+        success: true,
+        deletedCount,
+        failedCount
+      });
+
+    } catch (error) {
+      console.error('Bulk delete messages error:', error);
+      socket.emit('error', { message: 'Failed to bulk delete messages' });
     }
   }
 
