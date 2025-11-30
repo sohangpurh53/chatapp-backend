@@ -1305,12 +1305,12 @@ class SocketHandlers {
     console.log(`[CALL SENT] Incoming call notification sent to user ${to} on socket ${targetSocketId}`);
 
     // Send push notification (will only send if receiver is offline or app in background)
-    await notificationService.notifyIncomingCall({
-      callId,
-      callerId: socket.userId,
-      receiverId: to,
-      callType
-    });
+    // await notificationService.notifyIncomingCall({
+    //   callId,
+    //   callerId: socket.userId,
+    //   receiverId: to,
+    //   callType
+    // });
 
     // Confirm to caller
     socket.emit('call-initiated', {
