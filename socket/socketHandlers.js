@@ -746,12 +746,12 @@ class SocketHandlers {
       });
 
       // Send push notification (will only send if receiver is offline or app in background)
-      await notificationService.notifyIncomingCall({
-        callId,
-        callerId: socket.userId,
-        receiverId,
-        callType
-      });
+      // await notificationService.notifyIncomingCall({
+      //   callId,
+      //   callerId: socket.userId,
+      //   receiverId,
+      //   callType
+      // });
 
       // Confirm to caller and store call reference
       socket.emit('call_initiated', {
