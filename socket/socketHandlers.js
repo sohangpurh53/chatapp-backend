@@ -1507,26 +1507,56 @@ class SocketHandlers {
 
       console.log(`📥 User ${userId} downloaded file from message ${messageId}`);
 
-      // Find the message
-      const message = await Message.findByPk(messageId);
+      // Find the message with chat info
+      const message = await Message.findByPk(messageId, {
+        include: [{
+          model: Chat,
+          attributes: ['id', 'isGroup', 'participant1Id', 'participant2Id']
+        }]
+      });
+
       if (!message) {
         console.error('Message not found:', messageId);
         return;
       }
 
-      // Update downloadedBy array
-      let downloadedBy = message.downloadedBy || [];
-      if (!downloadedBy.includes(userId)) {
-        downloadedBy.push(userId);
-        await message.update({ downloadedBy });
-        console.log(`✅ Updated download status for message ${messageId}`);
+      const chat = message.Chat;
+      const chatId = chat.id;
+      
+      if (chat.isGroup) {
+        // For group chats, use array
+        let downloadedBy = message.downloadedBy || [];
+        if (!downloadedBy.includes(userId)) {
+          downloadedBy.push(userId);
+          await message.update({ downloadedBy });
+          console.log(`✅ Updated download status for group message ${messageId}`);
+        }
+      } else {
+        // For direct chats, use participant fields
+        const updateData = {};
+        
+        if (userId === chat.participant1Id) {
+          updateData.participant1Downloaded = true;
+        } else if (userId === chat.participant2Id) {
+          updateData.participant2Downloaded = true;
+        }
+        
+        if (Object.keys(updateData).length > 0) {
+          await message.update(updateData);
+          console.log(`✅ Updated download status for direct chat message ${messageId}`);
+        }
       }
 
-      // Emit to the user that download was tracked
-      socket.emit('file_download_tracked', {
+      // Emit to ALL users in the chat (real-time update)
+      this.io.to(chatId).emit('file_download_updated', {
         messageId,
-        downloadedBy,
+        chatId,
+        participant1Downloaded: message.participant1Downloaded,
+        participant2Downloaded: message.participant2Downloaded,
+        downloadedBy: message.downloadedBy,
       });
+
+      console.log(`📡 Emitted download update to chat ${chatId}`);
 
     } catch (error) {
       console.error('Error tracking file download:', error);

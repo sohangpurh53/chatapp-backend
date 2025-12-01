@@ -127,12 +127,23 @@ const Message = sequelize.define('Message', {
     allowNull: true,
     defaultValue: null
   },
-  // Track which users have downloaded this file
+  // Track file downloads for direct chats
+  participant1Downloaded: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Whether participant1 has downloaded this file'
+  },
+  participant2Downloaded: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Whether participant2 has downloaded this file'
+  },
+  // For group chats, still use array
   downloadedBy: {
     type: DataTypes.JSON,
     allowNull: true,
     defaultValue: null,
-    comment: 'Array of user IDs who have downloaded this file'
+    comment: 'Array of user IDs who have downloaded this file (for group chats)'
   }
 }, {
   indexes: [
