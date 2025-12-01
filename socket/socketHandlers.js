@@ -379,43 +379,10 @@ class SocketHandlers {
         timestamp: new Date()
       });
 
-      // 4. EXISTING: Send push notification to offline users (KEEP)
-      // Note: Worker will also handle FCM, but this ensures immediate notification
-      if (!chat.isGroup) {
-        // Direct message - check if receiver is online
-        const isReceiverOnline = this.connectedUsers.has(receiverId);
-        if (!isReceiverOnline) {
-          await notificationService.notifyNewMessage({
-            messageId: message.id,
-            senderId: socket.userId,
-            receiverId,
-            chatId,
-            content,
-            isEncrypted,
-            messageType
-          });
-        }
-      } else {
-        // Group message - notify offline participants
-        const onlineUsers = Array.from(this.connectedUsers.keys());
-        const offlineParticipants = participants
-          .map(p => p.userId)
-          .filter(id => !onlineUsers.includes(id) && id !== socket.userId);
-
-        if (offlineParticipants.length > 0) {
-          await notificationService.notifyGroupMessage(
-            {
-              messageId: message.id,
-              senderId: socket.userId,
-              chatId,
-              content,
-              isEncrypted,
-              messageType
-            },
-            offlineParticipants
-          );
-        }
-      }
+      // 4. FCM notifications are now handled by the worker
+      // REMOVED: Duplicate FCM calls to prevent double notifications
+      // The messageWorker will handle FCM for offline users automatically
+      // This eliminates the duplicate notification issue
 
     } catch (error) {
       console.error('Send message error:', error);
