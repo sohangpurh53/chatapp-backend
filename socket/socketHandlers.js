@@ -3,6 +3,8 @@ const { Op } = require('sequelize');
 const redisService = require('../config/redis');
 const { v4: uuidv4 } = require('uuid');
 const notificationService = require('../services/notificationService');
+// NEW: Import queues for guaranteed delivery
+const { messageQueue, callEventQueue } = require('../config/queue');
 
 class SocketHandlers {
   constructor(io) {
@@ -24,6 +26,9 @@ class SocketHandlers {
 
     // Join user to their chat rooms
     this.joinUserChats(socket);
+
+    // NEW: Sync pending messages when user connects
+    this.syncPendingMessages(socket);
 
     // Send current online users list to the newly connected user
     const onlineUserIds = Array.from(this.connectedUsers.keys());
@@ -85,6 +90,95 @@ class SocketHandlers {
       });
     } catch (error) {
       console.error('Error joining user chats:', error);
+    }
+  }
+
+  /**
+   * NEW: Sync pending messages when user connects
+   * Delivers all messages that were missed while offline
+   */
+  async syncPendingMessages(socket) {
+    try {
+      console.log(`🔄 Syncing pending messages for user ${socket.userId}`);
+
+      // Get all pending/undelivered messages for this user
+      const pendingMessages = await Message.findAll({
+        include: [
+          {
+            model: MessageReceipt,
+            where: {
+              userId: socket.userId,
+              status: { [Op.in]: ['pending', 'sent'] } // Not delivered yet
+            },
+            required: true
+          },
+          {
+            model: User,
+            as: 'sender',
+            attributes: ['id', 'username', 'avatar', 'publicKey']
+          },
+          {
+            model: User,
+            as: 'receiver',
+            attributes: ['id', 'username', 'avatar', 'publicKey'],
+            required: false
+          },
+          {
+            model: Message,
+            as: 'replyTo',
+            attributes: ['id', 'content', 'messageType', 'encryptedContent', 'isEncrypted', 'keyId'],
+            include: [{
+              model: User,
+              as: 'sender',
+              attributes: ['id', 'username', 'publicKey']
+            }],
+            required: false
+          }
+        ],
+        attributes: {
+          include: [
+            'encryptedContent',
+            'isEncrypted',
+            'keyId',
+            'encryptionIv',
+            'authTag',
+            'encryptionAlgorithm',
+            'encryptionVersion'
+          ]
+        },
+        order: [['createdAt', 'ASC']] // Oldest first
+      });
+
+      if (pendingMessages.length > 0) {
+        console.log(`📬 Found ${pendingMessages.length} pending messages for user ${socket.userId}`);
+
+        // Send all pending messages
+        socket.emit('sync_pending_messages', {
+          messages: pendingMessages,
+          count: pendingMessages.length
+        });
+
+        // Mark all as delivered
+        await MessageReceipt.update(
+          {
+            status: 'delivered',
+            deliveryMethod: 'socket',
+            deliveredAt: new Date()
+          },
+          {
+            where: {
+              userId: socket.userId,
+              status: { [Op.in]: ['pending', 'sent'] }
+            }
+          }
+        );
+
+        console.log(`✅ Synced ${pendingMessages.length} pending messages to user ${socket.userId}`);
+      } else {
+        console.log(`ℹ️  No pending messages for user ${socket.userId}`);
+      }
+    } catch (error) {
+      console.error('Error syncing pending messages:', error);
     }
   }
 
@@ -248,10 +342,45 @@ class SocketHandlers {
         });
       }
 
-      // Emit to all participants in the chat
+      // ========================================================================
+      // HYBRID MODE: Direct emit (existing) + Queue (new - for reliability)
+      // ========================================================================
+      
+      // 1. EXISTING: Direct emit to all participants (KEEP - for immediate delivery)
       this.io.to(`chat_${chatId}`).emit('new_message', completeMessage);
+      console.log(`📡 Message ${message.id} emitted directly to chat ${chatId}`);
 
-      // Send push notification to offline users
+      // 2. NEW: Also queue for guaranteed delivery (backup if direct fails)
+      const recipientIds = participants.map(p => p.userId);
+      await messageQueue.add(
+        'deliver-message',
+        {
+          messageId: message.id,
+          chatId,
+          recipientIds,
+          event: 'new_message'
+        },
+        {
+          priority: 5, // Normal priority
+          attempts: 10, // Retry up to 10 times
+          backoff: {
+            type: 'exponential',
+            delay: 1000
+          },
+          delay: 2000 // Wait 2 seconds before processing (gives direct emit time to work)
+        }
+      );
+      console.log(`📬 Message ${message.id} queued for guaranteed delivery`);
+
+      // 3. Immediate acknowledgment to sender
+      socket.emit('message_sent', {
+        messageId: message.id,
+        status: 'queued',
+        timestamp: new Date()
+      });
+
+      // 4. EXISTING: Send push notification to offline users (KEEP)
+      // Note: Worker will also handle FCM, but this ensures immediate notification
       if (!chat.isGroup) {
         // Direct message - check if receiver is online
         const isReceiverOnline = this.connectedUsers.has(receiverId);
@@ -1291,7 +1420,11 @@ class SocketHandlers {
     this.userCalls.set(socket.userId, callId);
     this.userCalls.set(to, callId);
 
-    // CRITICAL: Send incoming-call event to receiver
+    // ========================================================================
+    // HYBRID MODE: Direct emit (existing) + Queue (new - for reliability)
+    // ========================================================================
+    
+    // 1. EXISTING: Direct emit to receiver (KEEP - for immediate delivery)
     this.io.to(targetSocketId).emit('incoming-call', {
       callId,
       from: socket.userId,
@@ -1301,26 +1434,45 @@ class SocketHandlers {
       callType,
       offer
     });
+    console.log(`📡 [CALL SENT] Incoming call notification sent directly to user ${to}`);
 
-    console.log(`[CALL SENT] Incoming call notification sent to user ${to} on socket ${targetSocketId}`);
+    // 2. NEW: Also queue for guaranteed delivery (backup if direct fails)
+    await callEventQueue.add(
+      'incoming-call',
+      {
+        eventType: 'incoming-call',
+        callId,
+        targetUserId: to,
+        callData: {
+          callId,
+          from: socket.userId,
+          to,
+          callerName: caller.username,
+          callerAvatar: caller.avatar,
+          callType,
+          offer
+        }
+      },
+      {
+        priority: 1, // Highest priority (calls are time-sensitive)
+        attempts: 5,
+        backoff: {
+          type: 'fixed',
+          delay: 500 // Fast retry for calls
+        },
+        delay: 1000 // Wait 1 second before processing (gives direct emit time to work)
+      }
+    );
+    console.log(`📬 [CALL QUEUED] Call notification queued for guaranteed delivery`);
 
-    // Send push notification (will only send if receiver is offline or app in background)
-    // await notificationService.notifyIncomingCall({
-    //   callId,
-    //   callerId: socket.userId,
-    //   receiverId: to,
-    //   callType
-    // });
-
-    // Confirm to caller
+    // 3. Confirm to caller
     socket.emit('call-initiated', {
       callId,
       receiverId: to,
       callType,
       status: 'ringing'
     });
-
-    console.log(`[CALL CONFIRMED] Call initiation confirmed to caller ${socket.userId}`);
+    console.log(`✅ [CALL CONFIRMED] Call initiation confirmed to caller ${socket.userId}`);
 
     // Set timeout for missed call (30 seconds)
     setTimeout(async () => {

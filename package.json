@@ -7,6 +7,9 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "start:worker": "node workers/notificationWorker.js",
+    "start:message-worker": "node workers/messageWorker.js",
+    "start:call-worker": "node workers/callEventWorker.js",
+    "start:all-workers": "npm run start:worker & npm run start:message-worker & npm run start:call-worker",
     "init-db": "node scripts/init-db.js",
     "test-api": "node test-api.js",
     "test-socket": "node test-socket.js",
@@ -24,6 +27,7 @@
   "dependencies": {
     "@bull-board/api": "^5.10.2",
     "@bull-board/express": "^5.10.2",
+    "@socket.io/redis-adapter": "^8.2.1",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.0.0",
     "cors": "^2.8.5",

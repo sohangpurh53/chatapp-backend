@@ -13,7 +13,15 @@ const redisService = require('./config/redis');
 const { createBullBoard } = require('@bull-board/api');
 const { BullMQAdapter } = require('@bull-board/api/bullMQAdapter');
 const { ExpressAdapter } = require('@bull-board/express');
-const { notificationQueue } = require('./config/queue');
+const { 
+  notificationQueue, 
+  messageQueue, 
+  callEventQueue, 
+  deadLetterQueue 
+} = require('./config/queue');
+
+// Socket.IO Redis Adapter for multi-server support
+const { setupSocketAdapter } = require('./config/socketAdapter');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -31,6 +39,10 @@ const io = socketIo(server, {
   }
 });
 
+// Setup Redis adapter for multi-server Socket.IO support
+// This allows multiple server instances to share Socket.IO state
+setupSocketAdapter(io);
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -39,12 +51,17 @@ app.use(express.urlencoded({ extended: true }));
 // Serve static files for testing
 app.use(express.static('public'));
 
-// Setup Bull Board Dashboard
+// Setup Bull Board Dashboard with all queues
 const serverAdapter = new ExpressAdapter();
 serverAdapter.setBasePath('/admin/queues');
 
 createBullBoard({
-  queues: [new BullMQAdapter(notificationQueue)],
+  queues: [
+    new BullMQAdapter(notificationQueue),
+    new BullMQAdapter(messageQueue),
+    new BullMQAdapter(callEventQueue),
+    new BullMQAdapter(deadLetterQueue)
+  ],
   serverAdapter: serverAdapter,
 });
 
@@ -108,13 +125,30 @@ async function startServer() {
     const { initializeBucket } = require('./config/minio');
     await initializeBucket();
 
+    // Initialize workers with Socket.IO instance
+    console.log('🚀 Initializing workers...');
+    
+    // Import and set up message worker
+    const { messageWorker, setIO: setMessageWorkerIO } = require('./workers/messageWorker');
+    setMessageWorkerIO(io);
+    console.log('✅ Message worker initialized');
+    
+    // Import and set up call event worker
+    const { callEventWorker, setIO: setCallEventWorkerIO } = require('./workers/callEventWorker');
+    setCallEventWorkerIO(io);
+    console.log('✅ Call event worker initialized');
+    
     // Start notification worker in production
     if (process.env.NODE_ENV === 'production') {
       console.log('🚀 Starting notification worker in production mode...');
       require('./workers/notificationWorker');
     } else {
       console.log('ℹ️  Notification worker not started (development mode)');
-      console.log('ℹ️  To start worker manually: npm run start:worker');
+      console.log('ℹ️  To start workers manually:');
+      console.log('   - npm run start:worker (notifications)');
+      console.log('   - npm run start:message-worker (messages)');
+      console.log('   - npm run start:call-worker (calls)');
+      console.log('   - npm run start:all-workers (all workers)');
     }
 
     // Start server
