@@ -107,6 +107,7 @@ class SocketHandlers {
         include: [
           {
             model: MessageReceipt,
+            as: 'receipts',
             where: {
               userId: socket.userId,
               status: { [Op.in]: ['pending', 'sent'] } // Not delivered yet
@@ -1511,6 +1512,7 @@ class SocketHandlers {
       const message = await Message.findByPk(messageId, {
         include: [{
           model: Chat,
+          as: 'chat',
           attributes: ['id', 'isGroup', 'participant1Id', 'participant2Id']
         }]
       });
@@ -1520,7 +1522,7 @@ class SocketHandlers {
         return;
       }
 
-      const chat = message.Chat;
+      const chat = message.chat;
       const chatId = chat.id;
       
       if (chat.isGroup) {
