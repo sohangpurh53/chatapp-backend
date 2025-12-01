@@ -47,6 +47,7 @@ class SocketHandlers {
     socket.on('message_read', (data) => this.handleMessageRead(socket, data));
     socket.on('delete_message', (data) => this.handleDeleteMessage(socket, data));
     socket.on('bulk_delete_messages', (data) => this.handleBulkDeleteMessages(socket, data));
+    socket.on('file_downloaded', (data) => this.handleFileDownloaded(socket, data));
     socket.on('get-online-users', () => this.handleGetOnlineUsers(socket));
     
 
@@ -1496,6 +1497,39 @@ class SocketHandlers {
         callId,
         from: socket.userId 
       });
+    }
+  }
+
+  async handleFileDownloaded(socket, data) {
+    try {
+      const { messageId } = data;
+      const userId = socket.userId;
+
+      console.log(`📥 User ${userId} downloaded file from message ${messageId}`);
+
+      // Find the message
+      const message = await Message.findByPk(messageId);
+      if (!message) {
+        console.error('Message not found:', messageId);
+        return;
+      }
+
+      // Update downloadedBy array
+      let downloadedBy = message.downloadedBy || [];
+      if (!downloadedBy.includes(userId)) {
+        downloadedBy.push(userId);
+        await message.update({ downloadedBy });
+        console.log(`✅ Updated download status for message ${messageId}`);
+      }
+
+      // Emit to the user that download was tracked
+      socket.emit('file_download_tracked', {
+        messageId,
+        downloadedBy,
+      });
+
+    } catch (error) {
+      console.error('Error tracking file download:', error);
     }
   }
 }

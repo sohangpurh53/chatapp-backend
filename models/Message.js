@@ -126,6 +126,13 @@ const Message = sequelize.define('Message', {
     type: DataTypes.JSON,
     allowNull: true,
     defaultValue: null
+  },
+  // Track which users have downloaded this file
+  downloadedBy: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: null,
+    comment: 'Array of user IDs who have downloaded this file'
   }
 }, {
   indexes: [
