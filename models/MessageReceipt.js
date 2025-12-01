@@ -24,7 +24,7 @@ const MessageReceipt = sequelize.define('MessageReceipt', {
     }
   },
   status: {
-    type: DataTypes.ENUM('delivered', 'read'),
+    type: DataTypes.ENUM('delivered', 'read', 'sent', 'pending'),
     allowNull: false
   },
   timestamp: {
