@@ -7,7 +7,7 @@ class NotificationService {
    */
   async notifyIncomingCall(callData) {
     try {
-      const { callId, callerId, receiverId, callType } = callData;
+      const { callId, callerId, receiverId, callType, chatId } = callData;
 
       // Get caller info
       const caller = await User.findByPk(callerId, {
@@ -28,9 +28,11 @@ class NotificationService {
         data: {
           callId,
           callerId,
+          receiverId, // Added for frontend to identify receiver
           callerName: caller.username,
           callerAvatar: caller.avatar,
           callType,
+          chatId, // Added for group calls
           action: 'open_call_screen'
         }
       });

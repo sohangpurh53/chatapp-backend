@@ -76,7 +76,8 @@ async function processCallEvent(job) {
         callId,
         callerId: callData.from || callData.callerId,
         receiverId: targetUserId,
-        callType: callData.callType
+        callType: callData.callType,
+        chatId: callData.chatId // Added for group calls
       });
 
       console.log(`✅ FCM call notification sent to user ${targetUserId}`);
