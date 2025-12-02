@@ -778,25 +778,30 @@ class SocketHandlers {
       const { receiverId, callType = 'voice', chatId } = data;
       const callId = uuidv4();
 
-      // Check if receiver is online
-      const receiverSocketId = this.connectedUsers.get(receiverId);
-      if (!receiverSocketId) {
-        socket.emit('call_error', { message: 'User is offline' });
+      // Check if receiver exists
+      const receiver = await User.findByPk(receiverId);
+      if (!receiver) {
+        socket.emit('call_error', { message: 'User not found' });
         return;
       }
 
-      // Check if user is already in a call
+      // Check if caller is already in a call
       const existingCall = await redisService.getUserCallStatus(socket.userId);
       if (existingCall) {
         socket.emit('call_error', { message: 'You are already in a call' });
         return;
       }
 
+      // Check if receiver is already in a call
       const receiverCall = await redisService.getUserCallStatus(receiverId);
       if (receiverCall) {
         socket.emit('call_error', { message: 'User is busy' });
         return;
       }
+
+      // Check if receiver is online (for Socket.IO delivery)
+      const receiverSocketId = this.connectedUsers.get(receiverId);
+      const isReceiverOnline = !!receiverSocketId;
 
       // Create call record
       const call = await Call.create({
@@ -834,29 +839,58 @@ class SocketHandlers {
         attributes: ['id', 'username', 'avatar']
       });
 
-      // Notify receiver
-      this.io.to(receiverSocketId).emit('incoming_call', {
-        callId,
-        caller,
-        callType,
-        chatId,
-        receiverId
-      });
-
-      // Send push notification (will only send if receiver is offline or app in background)
-      // await notificationService.notifyIncomingCall({
-      //   callId,
-      //   callerId: socket.userId,
-      //   receiverId,
-      //   callType
-      // });
+      // Notify receiver based on online status
+      if (isReceiverOnline && receiverSocketId) {
+        // User is online - send via Socket.IO
+        console.log(`📡 Receiver ${receiverId} is online, sending via Socket.IO`);
+        this.io.to(receiverSocketId).emit('incoming_call', {
+          callId,
+          caller,
+          callType,
+          chatId,
+          receiverId
+        });
+      } else {
+        // User is offline - send via FCM
+        console.log(`📱 Receiver ${receiverId} is offline, sending via FCM`);
+        const { callEventQueue } = require('../config/queue');
+        
+        // Queue call event for delivery (will use FCM)
+        await callEventQueue.add(
+          'call-event',
+          {
+            eventType: 'incoming-call',
+            callId,
+            targetUserId: receiverId,
+            callData: {
+              callId,
+              callerId: socket.userId,
+              receiverId,
+              callType,
+              chatId,
+              from: socket.userId,
+              callerName: caller.username,
+              callerAvatar: caller.avatar
+            }
+          },
+          {
+            priority: 1, // Highest priority
+            attempts: 3,
+            backoff: {
+              type: 'exponential',
+              delay: 1000
+            }
+          }
+        );
+      }
 
       // Confirm to caller and store call reference
       socket.emit('call_initiated', {
         callId,
         receiverId,
         callType,
-        status: 'ringing'
+        status: isReceiverOnline ? 'ringing' : 'calling', // Different status for offline
+        receiverOnline: isReceiverOnline
       });
 
       // Store the call ID in the socket for easy access
