@@ -839,9 +839,8 @@ class SocketHandlers {
         attributes: ['id', 'username', 'avatar']
       });
 
-      // Notify receiver based on online status
+      // ✅ FIX 3: Always try socket first if online, then ALWAYS queue FCM as backup
       if (isReceiverOnline && receiverSocketId) {
-        // User is online - send via Socket.IO
         console.log(`📡 Receiver ${receiverId} is online, sending via Socket.IO`);
         this.io.to(receiverSocketId).emit('incoming_call', {
           callId,
@@ -850,39 +849,41 @@ class SocketHandlers {
           chatId,
           receiverId
         });
-      } else {
-        // User is offline - send via FCM
-        console.log(`📱 Receiver ${receiverId} is offline, sending via FCM`);
-        const { callEventQueue } = require('../config/queue');
-        
-        // Queue call event for delivery (will use FCM)
-        await callEventQueue.add(
-          'call-event',
-          {
-            eventType: 'incoming-call',
-            callId,
-            targetUserId: receiverId,
-            callData: {
-              callId,
-              callerId: socket.userId,
-              receiverId,
-              callType,
-              chatId,
-              from: socket.userId,
-              callerName: caller.username,
-              callerAvatar: caller.avatar
-            }
-          },
-          {
-            priority: 1, // Highest priority
-            attempts: 3,
-            backoff: {
-              type: 'exponential',
-              delay: 1000
-            }
-          }
-        );
       }
+
+      // ✅ ALWAYS queue FCM as backup (with delay if online)
+      console.log(`📱 Queueing FCM backup notification for ${receiverId}`);
+      const { callEventQueue } = require('../config/queue');
+      
+      await callEventQueue.add(
+        'call-event',
+        {
+          eventType: 'incoming_call',  // ✅ FIX: Changed from 'incoming-call' to 'incoming_call' to match socket event
+          callId,
+          targetUserId: receiverId,
+          callData: {
+            callId,
+            callerId: socket.userId,
+            receiverId,
+            callType,
+            chatId,
+            from: socket.userId,
+            callerName: caller.username,
+            callerAvatar: caller.avatar
+          }
+        },
+        {
+          priority: 1, // Highest priority
+          attempts: 3,
+          delay: isReceiverOnline ? 2000 : 0,  // ✅ 2 sec delay if online (gives socket time)
+          backoff: {
+            type: 'exponential',
+            delay: 1000
+          }
+        }
+      );
+      
+      console.log(`✅ FCM backup queued with ${isReceiverOnline ? '2s delay' : 'no delay'}`);
 
       // Confirm to caller and store call reference
       socket.emit('call_initiated', {

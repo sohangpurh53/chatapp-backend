@@ -71,7 +71,7 @@ async function processCallEvent(job) {
     console.log(`📱 User ${targetUserId} offline or Socket.IO failed, sending FCM notification`);
 
     // Send FCM notification based on event type
-    if (eventType === 'incoming-call') {
+    if (eventType === 'incoming_call') {  // ✅ FIX: Changed from 'incoming-call' to 'incoming_call' to match socket event
       await notificationService.notifyIncomingCall({
         callId,
         callerId: callData.from || callData.callerId,
