@@ -48,13 +48,16 @@ class FCMService {
       const messaging = getMessaging();
       if (!messaging) {
         console.warn(`⚠️  Firebase not configured - skipping notification for user ${userId}`);
-        await Notification.update(
-          {
-            status: 'failed',
-            error: 'Firebase not configured'
-          },
-          { where: { id: notification.id } }
-        );
+        // Only update if notification has an id (database record)
+        if (notification.id) {
+          await Notification.update(
+            {
+              status: 'failed',
+              error: 'Firebase not configured'
+            },
+            { where: { id: notification.id } }
+          );
+        }
         return { success: false, reason: 'firebase_not_configured' };
       }
 
@@ -65,13 +68,16 @@ class FCMService {
 
       if (!user || !user.fcmToken) {
         console.log(`⚠️  No FCM token for user ${userId}`);
-        await Notification.update(
-          {
-            status: 'failed',
-            error: 'No FCM token'
-          },
-          { where: { id: notification.id } }
-        );
+        // Only update if notification has an id (database record)
+        if (notification.id) {
+          await Notification.update(
+            {
+              status: 'failed',
+              error: 'No FCM token'
+            },
+            { where: { id: notification.id } }
+          );
+        }
         return { success: false, reason: 'no_token' };
       }
 
@@ -79,13 +85,16 @@ class FCMService {
       const prefs = user.notificationPreferences || {};
       if (!this.shouldSendNotification(notification.type, prefs)) {
         console.log(`⚠️  Notification disabled by user preferences for user ${userId}`);
-        await Notification.update(
-          {
-            status: 'failed',
-            error: 'Disabled by user preferences'
-          },
-          { where: { id: notification.id } }
-        );
+        // Only update if notification has an id (database record)
+        if (notification.id) {
+          await Notification.update(
+            {
+              status: 'failed',
+              error: 'Disabled by user preferences'
+            },
+            { where: { id: notification.id } }
+          );
+        }
         return { success: false, reason: 'disabled_by_user' };
       }
 
@@ -135,15 +144,17 @@ class FCMService {
       // Send via FCM
       const response = await messaging.send(message);
 
-      // Log success
-      await Notification.update(
-        {
-          status: 'sent',
-          fcmMessageId: response,
-          sentAt: new Date()
-        },
-        { where: { id: notification.id } }
-      );
+      // Log success - only update if notification has an id (database record)
+      if (notification.id) {
+        await Notification.update(
+          {
+            status: 'sent',
+            fcmMessageId: response,
+            sentAt: new Date()
+          },
+          { where: { id: notification.id } }
+        );
+      }
 
       console.log(`✅ Notification sent to user ${userId}:`, response);
       return { success: true, messageId: response };
@@ -158,14 +169,16 @@ class FCMService {
         await this.removeToken(userId);
       }
 
-      // Log failure
-      await Notification.update(
-        {
-          status: 'failed',
-          error: error.message
-        },
-        { where: { id: notification.id } }
-      );
+      // Log failure - only update if notification has an id (database record)
+      if (notification.id) {
+        await Notification.update(
+          {
+            status: 'failed',
+            error: error.message
+          },
+          { where: { id: notification.id } }
+        );
+      }
 
       throw error;
     }
