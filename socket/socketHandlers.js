@@ -3,8 +3,6 @@ const { Op } = require('sequelize');
 const redisService = require('../config/redis');
 const { v4: uuidv4 } = require('uuid');
 const notificationService = require('../services/notificationService');
-// NEW: Import queues for guaranteed delivery
-const { messageQueue, callEventQueue } = require('../config/queue');
 
 class SocketHandlers {
   constructor(io) {
@@ -51,6 +49,7 @@ class SocketHandlers {
     socket.on('get-online-users', () => this.handleGetOnlineUsers(socket));
     
 
+    // ✅ UNIFIED CALL EVENTS - Use only initiate_call (remove duplicate initiate-call)
     socket.on('initiate_call', (data) => this.handleInitiateCall(socket, data));
     socket.on('answer_call', (data) => this.handleAnswerCall(socket, data));
     socket.on('decline_call', (data) => this.handleDeclineCall(socket, data));
@@ -60,17 +59,6 @@ class SocketHandlers {
     socket.on('toggle_video', (data) => this.handleToggleVideo(socket, data));
     socket.on('share_screen', (data) => this.handleShareScreen(socket, data));
     socket.on('stop_screen_share', (data) => this.handleStopScreenShare(socket, data));
-
-    // WebRTC Signaling events (for SignalingService)
-    socket.on('join-room', (data) => this.handleJoinRoom(socket, data));
-    socket.on('leave-room', (data) => this.handleLeaveRoom(socket, data));
-    socket.on('offer', (data) => this.handleOffer(socket, data));
-    socket.on('answer', (data) => this.handleAnswer(socket, data));
-    socket.on('ice-candidate', (data) => this.handleIceCandidate(socket, data));
-    socket.on('initiate-call', (data) => this.handleInitiateCallSignaling(socket, data));
-    socket.on('accept-call', (data) => this.handleAcceptCall(socket, data));
-    socket.on('reject-call', (data) => this.handleRejectCall(socket, data));
-    socket.on('end-call', (data) => this.handleEndCallSignaling(socket, data));
 
     socket.on('disconnect', () => this.handleDisconnect(socket));
   }
@@ -344,47 +332,41 @@ class SocketHandlers {
         });
       }
 
-      // ========================================================================
-      // HYBRID MODE: Direct emit (existing) + Queue (new - for reliability)
-      // ========================================================================
-      
-      // 1. EXISTING: Direct emit to all participants (KEEP - for immediate delivery)
+      // ✅ SIMPLIFIED: Direct socket delivery only
       this.io.to(`chat_${chatId}`).emit('new_message', completeMessage);
       console.log(`📡 Message ${message.id} emitted directly to chat ${chatId}`);
 
-      // 2. NEW: Also queue for guaranteed delivery (backup if direct fails)
-      const recipientIds = participants.map(p => p.userId);
-      await messageQueue.add(
-        'deliver-message',
-        {
-          messageId: message.id,
-          chatId,
-          recipientIds,
-          event: 'new_message'
-        },
-        {
-          priority: 5, // Normal priority
-          attempts: 10, // Retry up to 10 times
-          backoff: {
-            type: 'exponential',
-            delay: 1000
-          },
-          delay: 2000 // Wait 2 seconds before processing (gives direct emit time to work)
-        }
-      );
-      console.log(`📬 Message ${message.id} queued for guaranteed delivery`);
-
-      // 3. Immediate acknowledgment to sender
+      // Immediate acknowledgment to sender
       socket.emit('message_sent', {
         messageId: message.id,
-        status: 'queued',
+        status: 'sent',
         timestamp: new Date()
       });
 
-      // 4. FCM notifications are now handled by the worker
-      // REMOVED: Duplicate FCM calls to prevent double notifications
-      // The messageWorker will handle FCM for offline users automatically
-      // This eliminates the duplicate notification issue
+      // ✅ Send FCM only to offline participants
+      const fcmService = require('../services/fcmService');
+      for (const participant of participants) {
+        const isOnline = await redisService.getUserOnlineStatus(participant.userId);
+        
+        if (!isOnline) {
+          console.log(`📱 Sending FCM to offline user ${participant.userId}`);
+          try {
+            await fcmService.sendNotification(participant.userId, {
+              title: message.sender.username,
+              body: message.isEncrypted ? '🔒 Encrypted message' : message.content,
+              data: {
+                type: 'new_message',
+                messageId: message.id,
+                chatId: message.chatId,
+                senderId: message.senderId,
+                senderName: message.sender.username
+              }
+            });
+          } catch (fcmError) {
+            console.error(`❌ FCM failed for user ${participant.userId}:`, fcmError.message);
+          }
+        }
+      }
 
     } catch (error) {
       console.error('Send message error:', error);
@@ -839,9 +821,9 @@ class SocketHandlers {
         attributes: ['id', 'username', 'avatar']
       });
 
-      // ✅ FIX 3: Always try socket first if online, then ALWAYS queue FCM as backup
+      // ✅ SIMPLIFIED: Direct socket delivery for online users, FCM only for offline
       if (isReceiverOnline && receiverSocketId) {
-        console.log(`📡 Receiver ${receiverId} is online, sending via Socket.IO`);
+        console.log(`📡 Receiver ${receiverId} is ONLINE, sending via Socket.IO ONLY`);
         this.io.to(receiverSocketId).emit('incoming_call', {
           callId,
           caller,
@@ -849,41 +831,38 @@ class SocketHandlers {
           chatId,
           receiverId
         });
-      }
-
-      // ✅ ALWAYS queue FCM as backup (with delay if online)
-      console.log(`📱 Queueing FCM backup notification for ${receiverId}`);
-      const { callEventQueue } = require('../config/queue');
-      
-      await callEventQueue.add(
-        'call-event',
-        {
-          eventType: 'incoming_call',  // ✅ FIX: Changed from 'incoming-call' to 'incoming_call' to match socket event
-          callId,
-          targetUserId: receiverId,
-          callData: {
-            callId,
-            callerId: socket.userId,
-            receiverId,
-            callType,
-            chatId,
-            from: socket.userId,
-            callerName: caller.username,
-            callerAvatar: caller.avatar
-          }
-        },
-        {
-          priority: 1, // Highest priority
-          attempts: 3,
-          delay: isReceiverOnline ? 2000 : 0,  // ✅ 2 sec delay if online (gives socket time)
-          backoff: {
-            type: 'exponential',
-            delay: 1000
-          }
+        console.log(`✅ Call delivered via socket - NO FCM needed`);
+      } else {
+        // User is offline - send FCM notification
+        console.log(`📱 Receiver ${receiverId} is OFFLINE, sending FCM notification`);
+        const fcmService = require('../services/fcmService');
+        
+        try {
+          await fcmService.sendNotification(receiverId, {
+            title: `Incoming ${callType} call`,
+            body: `${caller.username} is calling you`,
+            data: {
+              type: 'incoming_call',
+              callId,
+              callerId: socket.userId,
+              receiverId,
+              callType,
+              chatId,
+              callerName: caller.username,
+              callerAvatar: caller.avatar
+            },
+            android: {
+              priority: 'high',
+              channelId: 'calls',
+              category: 'call',
+              fullScreenIntent: true
+            }
+          });
+          console.log(`✅ FCM notification sent to offline user`);
+        } catch (fcmError) {
+          console.error(`❌ FCM failed:`, fcmError.message);
         }
-      );
-      
-      console.log(`✅ FCM backup queued with ${isReceiverOnline ? '2s delay' : 'no delay'}`);
+      }
 
       // Confirm to caller and store call reference
       socket.emit('call_initiated', {
@@ -1292,249 +1271,7 @@ class SocketHandlers {
     this.io.to(`chat_${chatId}`).emit(event, data);
   }
 
-  // WebRTC Signaling handlers (for SignalingService compatibility)
-  
-  handleJoinRoom(socket, data) {
-    const { roomId, userId, userName } = data;
-    console.log(`User ${userName} (${userId}) joining room ${roomId}`);
-    
-    socket.join(`room_${roomId}`);
-    
-    // Notify others in room
-    socket.to(`room_${roomId}`).emit('user-joined', {
-      userId,
-      userName,
-      socketId: socket.id
-    });
-    
-    // Send existing users to new joiner (if needed for group calls)
-    // For now, just acknowledge
-    socket.emit('room-joined', { roomId, userId });
-  }
 
-  handleLeaveRoom(socket, data) {
-    const { roomId, userId } = data;
-    console.log(`User ${userId} leaving room ${roomId}`);
-    
-    socket.leave(`room_${roomId}`);
-    socket.to(`room_${roomId}`).emit('user-left', { userId });
-  }
-
-  handleOffer(socket, data) {
-    const { offer, to, from } = data;
-    console.log(`Forwarding offer from ${from} to ${to}`);
-    
-    const targetSocketId = this.connectedUsers.get(to);
-    if (targetSocketId) {
-      this.io.to(targetSocketId).emit('offer', { offer, from });
-    } else {
-      console.warn(`Target user ${to} not found for offer`);
-    }
-  }
-
-  handleAnswer(socket, data) {
-    const { answer, to, from } = data;
-    console.log(`Forwarding answer from ${from} to ${to}`);
-    
-    const targetSocketId = this.connectedUsers.get(to);
-    if (targetSocketId) {
-      this.io.to(targetSocketId).emit('answer', { answer, from });
-    } else {
-      console.warn(`Target user ${to} not found for answer`);
-    }
-  }
-
-  handleIceCandidate(socket, data) {
-    const { candidate, to } = data;
-    const from =socket?.userId
-    console.log(`Forwarding ICE candidate from ${from} to ${to}`);
-    
-    const targetSocketId = this.connectedUsers.get(to);
-    if (targetSocketId) {
-      this.io.to(targetSocketId).emit('ice-candidate', { candidate, from });
-    } else {
-      console.warn(`Target user ${to} not found for ICE candidate`);
-    }
-  }
-
- async handleInitiateCallSignaling(socket, data) {
-  try {
-    const { to, callType, offer } = data;
-
-    console.log(`[CALL INITIATE] Call from ${socket.userId} to ${to}, type: ${callType}`);
-
-    // Check if receiver is online
-    const targetSocketId = this.connectedUsers.get(to);
-    if (!targetSocketId) {
-      console.log(`[CALL FAILED] Receiver ${to} is offline`);
-      socket.emit('call-error', { message: 'User is offline' });
-      return;
-    }
-
-    // Check if caller is already in a call
-    const existingCallCaller = await redisService.getUserCallStatus(socket.userId);
-    if (existingCallCaller) {
-      console.log(`[CALL FAILED] Caller ${socket.userId} is already in a call`);
-      socket.emit('call-error', { message: 'You are already in a call' });
-      return;
-    }
-
-    // Check if receiver is already in a call
-    const existingCallReceiver = await redisService.getUserCallStatus(to);
-    if (existingCallReceiver) {
-      console.log(`[CALL FAILED] Receiver ${to} is busy`);
-      socket.emit('call-error', { message: 'User is busy' });
-      return;
-    }
-
-    // Get caller info
-    const caller = await User.findByPk(socket.userId, {
-      attributes: ['id', 'username', 'avatar']
-    });
-
-    // Create call record in database
-    const callRecord = await Call.create({
-      callerId: socket.userId,
-      receiverId: to,
-      callType,
-      status: 'initiated'
-    });
-
-    const callId = callRecord.id;
-
-    // Store call data in Redis
-    const callData = {
-      id: callId,
-      callerId: socket.userId,
-      receiverId: to,
-      callType,
-      status: 'ringing',
-      startedAt: new Date(),
-      participants: [socket.userId, to]
-    };
-
-    await redisService.setActiveCall(callId, callData);
-    await redisService.setUserCallStatus(socket.userId, callId, 'calling');
-    await redisService.setUserCallStatus(to, callId, 'receiving');
-
-    console.log(`[CALL TRACKING] Stored call ${callId}: Caller=${socket.userId}, Receiver=${to}`);
-
-    // Store in memory
-    this.activeCalls.set(callId, callData);
-    this.userCalls.set(socket.userId, callId);
-    this.userCalls.set(to, callId);
-
-    // ========================================================================
-    // HYBRID MODE: Direct emit (existing) + Queue (new - for reliability)
-    // ========================================================================
-    
-    // 1. EXISTING: Direct emit to receiver (KEEP - for immediate delivery)
-    this.io.to(targetSocketId).emit('incoming-call', {
-      callId,
-      from: socket.userId,
-      to,
-      callerName: caller.username,
-      callerAvatar: caller.avatar,
-      callType,
-      offer
-    });
-    console.log(`📡 [CALL SENT] Incoming call notification sent directly to user ${to}`);
-
-    // 2. NEW: Also queue for guaranteed delivery (backup if direct fails)
-    await callEventQueue.add(
-      'incoming-call',
-      {
-        eventType: 'incoming-call',
-        callId,
-        targetUserId: to,
-        callData: {
-          callId,
-          from: socket.userId,
-          to,
-          callerName: caller.username,
-          callerAvatar: caller.avatar,
-          callType,
-          offer
-        }
-      },
-      {
-        priority: 1, // Highest priority (calls are time-sensitive)
-        attempts: 5,
-        backoff: {
-          type: 'fixed',
-          delay: 500 // Fast retry for calls
-        },
-        delay: 1000 // Wait 1 second before processing (gives direct emit time to work)
-      }
-    );
-    console.log(`📬 [CALL QUEUED] Call notification queued for guaranteed delivery`);
-
-    // 3. Confirm to caller
-    socket.emit('call-initiated', {
-      callId,
-      receiverId: to,
-      callType,
-      status: 'ringing'
-    });
-    console.log(`✅ [CALL CONFIRMED] Call initiation confirmed to caller ${socket.userId}`);
-
-    // Set timeout for missed call (30 seconds)
-    setTimeout(async () => {
-      const currentCall = await redisService.getActiveCall(callId);
-      if (currentCall && currentCall.status === 'ringing') {
-        console.log(`[CALL TIMEOUT] Call ${callId} timed out`);
-        await this.handleMissedCall(callId);
-      }
-    }, 30000);
-
-  } catch (error) {
-    console.error('[CALL ERROR] Initiate call signaling error:', error);
-    socket.emit('call-error', { message: 'Failed to initiate call' });
-  }
-}
-
-
-  handleAcceptCall(socket, data) {
-    const { to, callId } = data;
-    console.log(`[CALL ACCEPT] Call ${callId} accepted by ${socket.userId}, notifying ${to}`);
-    
-    const targetSocketId = this.connectedUsers.get(to);
-    if (targetSocketId) {
-      this.io.to(targetSocketId).emit('call-accepted', { 
-        callId,
-        from: socket.userId 
-      });
-      console.log(`[CALL ACCEPT] Notification sent to caller on socket ${targetSocketId}`);
-    } else {
-      console.log(`[CALL ACCEPT] Caller ${to} not found in connected users`);
-    }
-  }
-
-  handleRejectCall(socket, data) {
-    const { to, callId } = data;
-    console.log(`Call ${callId} rejected by ${socket.userId}`);
-    
-    const targetSocketId = this.connectedUsers.get(to);
-    if (targetSocketId) {
-      this.io.to(targetSocketId).emit('call-rejected', { 
-        callId,
-        from: socket.userId 
-      });
-    }
-  }
-
-  handleEndCallSignaling(socket, data) {
-    const { to, callId } = data;
-    console.log(`Call ${callId} ended by ${socket.userId}`);
-    
-    const targetSocketId = this.connectedUsers.get(to);
-    if (targetSocketId) {
-      this.io.to(targetSocketId).emit('call-ended', { 
-        callId,
-        from: socket.userId 
-      });
-    }
-  }
 
   async handleFileDownloaded(socket, data) {
     try {
