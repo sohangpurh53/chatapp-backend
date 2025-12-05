@@ -1270,18 +1270,32 @@ class SocketHandlers {
         { where: { id: callId } }
       );
 
-      // Clean up Redis
+      // ✅ FIX: ALWAYS clean up Redis, even if database update fails
       await redisService.deleteActiveCall(callId);
       await redisService.deleteUserCallStatus(callData.callerId);
       await redisService.deleteUserCallStatus(callData.receiverId);
 
-      // Clean up memory
+      // ✅ FIX: ALWAYS clean up memory maps
       this.activeCalls.delete(callId);
       this.userCalls.delete(callData.callerId);
       this.userCalls.delete(callData.receiverId);
 
     } catch (error) {
       console.error('End call cleanup error:', error);
+      // ✅ FIX: Even on error, try to clean up memory to prevent "user busy" errors
+      try {
+        if (callId) {
+          this.activeCalls.delete(callId);
+          // Try to get user IDs from memory if Redis failed
+          const callFromMemory = this.activeCalls.get(callId);
+          if (callFromMemory) {
+            this.userCalls.delete(callFromMemory.callerId);
+            this.userCalls.delete(callFromMemory.receiverId);
+          }
+        }
+      } catch (cleanupError) {
+        console.error('Emergency cleanup also failed:', cleanupError);
+      }
     }
   }
 
