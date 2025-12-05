@@ -821,6 +821,13 @@ class SocketHandlers {
         attributes: ['id', 'username', 'avatar']
       });
 
+      // ✅ ENHANCED: Send initial status to caller
+      socket.emit('call_status_update', {
+        callId,
+        status: 'calling',
+        receiverOnline: isReceiverOnline
+      });
+
       // ✅ SIMPLIFIED: Direct socket delivery for online users, FCM only for offline
       if (isReceiverOnline && receiverSocketId) {
         console.log(`📡 Receiver ${receiverId} is ONLINE, sending via Socket.IO ONLY`);
@@ -832,6 +839,13 @@ class SocketHandlers {
           receiverId
         });
         console.log(`✅ Call delivered via socket - NO FCM needed`);
+        
+        // Update status to ringing
+        socket.emit('call_status_update', {
+          callId,
+          status: 'ringing',
+          receiverOnline: true
+        });
       } else {
         // User is offline - send FCM notification
         console.log(`📱 Receiver ${receiverId} is OFFLINE, sending FCM notification`);
@@ -862,6 +876,19 @@ class SocketHandlers {
         } catch (fcmError) {
           console.error(`❌ FCM failed:`, fcmError.message);
         }
+        
+        // Check if user comes online or call is answered within 10 seconds
+        setTimeout(async () => {
+          const currentCall = await redisService.getActiveCall(callId);
+          if (currentCall && currentCall.status === 'ringing') {
+            // Still ringing after 10 seconds - user might be unavailable
+            socket.emit('call_status_update', {
+              callId,
+              status: 'unavailable',
+              receiverOnline: false
+            });
+          }
+        }, 10000); // 10 seconds
       }
 
       // Confirm to caller and store call reference
