@@ -1,11 +1,14 @@
 [phases.setup]
-nixpkgs = ["nodejs_22_x"]   # try nodejs_22_x if nodejs_22 is not found
+nixpkgs = ["nodejs_22"]
 
 [phases.install]
-cmds = ["npm ci --legacy-peer-deps"]
+cmds = ["npm install --legacy-peer-deps"]
 
 [start]
 cmd = "npm run start"
 
 [variables]
 NODE_ENV = "production"
+
+
+
