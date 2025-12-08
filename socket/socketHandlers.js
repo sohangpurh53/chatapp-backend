@@ -859,6 +859,15 @@ class SocketHandlers {
         attributes: ['id', 'username', 'avatar']
       });
 
+      // ✅ FIX: Verify caller exists
+      if (!caller) {
+        console.error(`❌ Caller ${socket.userId} not found in database`);
+        socket.emit('call_error', { message: 'Caller not found' });
+        // Clean up
+        await this.endCall(callId, 'error');
+        return;
+      }
+
       // ✅ ENHANCED: Send initial status to caller
       socket.emit('call_status_update', {
         callId,
@@ -869,9 +878,25 @@ class SocketHandlers {
       // ✅ SIMPLIFIED: Direct socket delivery for online users, FCM only for offline
       if (isReceiverOnline && receiverSocketId) {
         console.log(`📡 Receiver ${receiverId} is ONLINE, sending via Socket.IO ONLY`);
+        
+        // ✅ FIX: Ensure caller object has all required fields
+        const callerData = {
+          id: caller.id,
+          username: caller.username,
+          avatar: caller.avatar || null
+        };
+        
+        console.log('📦 Socket call data:', JSON.stringify({
+          callId,
+          caller: callerData,
+          callType,
+          chatId,
+          receiverId
+        }, null, 2));
+        
         this.io.to(receiverSocketId).emit('incoming_call', {
           callId,
-          caller,
+          caller: callerData,
           callType,
           chatId,
           receiverId
@@ -890,19 +915,24 @@ class SocketHandlers {
         const fcmService = require('../services/fcmService');
         
         try {
+          // ✅ FIX: Use safe property access and ensure all data is present
+          const fcmData = {
+            type: 'incoming_call',
+            callId,
+            callerId: socket.userId,
+            receiverId,
+            callType,
+            chatId: chatId || '',
+            callerName: caller?.username || 'Unknown',
+            callerAvatar: caller?.avatar || ''
+          };
+          
+          console.log('📦 FCM notification data:', JSON.stringify(fcmData, null, 2));
+          
           await fcmService.sendNotification(receiverId, {
             title: `Incoming ${callType} call`,
-            body: `${caller.username} is calling you`,
-            data: {
-              type: 'incoming_call',
-              callId,
-              callerId: socket.userId,
-              receiverId,
-              callType,
-              chatId,
-              callerName: caller.username,
-              callerAvatar: caller.avatar
-            },
+            body: `${caller?.username || 'Someone'} is calling you`,
+            data: fcmData,
             android: {
               priority: 'high',
               channelId: 'calls',
@@ -912,7 +942,8 @@ class SocketHandlers {
           });
           console.log(`✅ FCM notification sent to offline user`);
         } catch (fcmError) {
-          console.error(`❌ FCM failed:`, fcmError.message);
+          console.error(`❌ FCM failed for user ${receiverId}:`, fcmError.message);
+          console.error(`❌ FCM error stack:`, fcmError.stack);
         }
         
         // Check if user comes online or call is answered within 10 seconds
