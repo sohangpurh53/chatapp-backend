@@ -665,18 +665,24 @@ class SocketHandlers {
   async handleDisconnect(socket) {
     console.log(`User ${socket.user.username} disconnected`);
 
-    // Handle active call cleanup
+    // ✅ FIX: Handle active call cleanup more robustly
     const userCallId = this.userCalls?.get(socket?.userId);
     if (userCallId) {
+      console.log(`🧹 Cleaning up active call ${userCallId} for disconnected user ${socket.userId}`);
+      
+      // Get call data before ending
+      const callData = await redisService.getActiveCall(userCallId);
+      
+      // End the call
       await this.endCall(userCallId, 'network_error');
 
       // Notify other participant about disconnection
-      const callData = await redisService.getActiveCall(userCallId);
       if (callData) {
         const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
         const otherSocketId = this.connectedUsers.get(otherUserId);
 
         if (otherSocketId) {
+          console.log(`📡 Notifying other user ${otherUserId} about call end`);
           this.io.to(otherSocketId).emit('call_ended', {
             callId: userCallId,
             endedBy: socket.userId,
@@ -684,6 +690,13 @@ class SocketHandlers {
           });
         }
       }
+    }
+    
+    // ✅ FIX: Also check Redis for any stale call status
+    const redisCallId = await redisService.getUserCallStatus(socket.userId);
+    if (redisCallId && redisCallId !== userCallId) {
+      console.warn(`⚠️  Found stale call status in Redis for user ${socket.userId}, cleaning up...`);
+      await redisService.deleteUserCallStatus(socket.userId);
     }
 
     // Remove from connected users
@@ -760,25 +773,50 @@ class SocketHandlers {
       const { receiverId, callType = 'voice', chatId } = data;
       const callId = uuidv4();
 
+      console.log(`📞 Initiating call from ${socket.userId} to ${receiverId}`);
+
       // Check if receiver exists
       const receiver = await User.findByPk(receiverId);
       if (!receiver) {
+        console.error(`❌ Receiver ${receiverId} not found`);
         socket.emit('call_error', { message: 'User not found' });
         return;
       }
 
-      // Check if caller is already in a call
+      // ✅ FIX: Clean up any stale call status before checking
       const existingCall = await redisService.getUserCallStatus(socket.userId);
       if (existingCall) {
-        socket.emit('call_error', { message: 'You are already in a call' });
-        return;
+        console.warn(`⚠️  Caller ${socket.userId} has stale call status, cleaning up...`);
+        // Check if the call actually exists
+        const callData = await redisService.getActiveCall(existingCall);
+        if (!callData) {
+          // Stale data, clean it up
+          console.log(`🧹 Cleaning up stale call status for caller ${socket.userId}`);
+          await redisService.deleteUserCallStatus(socket.userId);
+          this.userCalls.delete(socket.userId);
+        } else {
+          console.error(`❌ Caller ${socket.userId} is already in active call ${existingCall}`);
+          socket.emit('call_error', { message: 'You are already in a call' });
+          return;
+        }
       }
 
-      // Check if receiver is already in a call
+      // ✅ FIX: Clean up any stale call status for receiver before checking
       const receiverCall = await redisService.getUserCallStatus(receiverId);
       if (receiverCall) {
-        socket.emit('call_error', { message: 'User is busy' });
-        return;
+        console.warn(`⚠️  Receiver ${receiverId} has stale call status, checking...`);
+        // Check if the call actually exists
+        const callData = await redisService.getActiveCall(receiverCall);
+        if (!callData) {
+          // Stale data, clean it up
+          console.log(`🧹 Cleaning up stale call status for receiver ${receiverId}`);
+          await redisService.deleteUserCallStatus(receiverId);
+          this.userCalls.delete(receiverId);
+        } else {
+          console.error(`❌ Receiver ${receiverId} is already in active call ${receiverCall}`);
+          socket.emit('call_error', { message: 'User is busy' });
+          return;
+        }
       }
 
       // Check if receiver is online (for Socket.IO delivery)
