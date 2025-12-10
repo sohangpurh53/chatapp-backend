@@ -114,7 +114,7 @@ class FCMService {
         });
       }
 
-      // Prepare FCM message with enhanced settings for calls
+      // Prepare FCM message - using only valid FCM properties
       const message = {
         token: user.fcmToken,
         notification: {
@@ -123,30 +123,23 @@ class FCMService {
         },
         data: dataPayload,
         android: {
-          // ✅ CRITICAL: Use 'high' priority for all call notifications
-          priority: notification.type === 'incoming_call' ? 'high' : (notification.priority || 'normal'),
-          // ✅ Enhanced notification settings for calls
+          // ✅ Use high priority for call notifications
+          priority: notification.type === 'incoming_call' ? 'high' : 'normal',
           notification: {
             sound: prefs.soundEnabled !== false ? 'default' : undefined,
             channelId: this.getChannelId(notification.type),
-            priority: notification.type === 'incoming_call' ? 'max' : 'high',
+            // ✅ Only use valid FCM notification properties
             defaultVibrateTimings: prefs.vibrationEnabled !== false,
-            // ✅ NEW: Critical settings for incoming calls
+            // ✅ For calls, use high visibility and importance
             ...(notification.type === 'incoming_call' && {
-              sticky: true, // Can't be dismissed by swipe
-              ongoing: true, // Persistent notification
-              autoCancel: false, // Don't auto-dismiss
-              timeoutAfter: 60000, // 60 seconds timeout
-              showWhen: true,
-              when: Date.now(),
-              // ✅ Full screen intent for calls (like WhatsApp)
-              fullScreenIntent: {
-                launchActivity: 'default'
-              }
+              visibility: 'public', // Show on lock screen
+              priority: 'high'
             })
           },
-          // ✅ NEW: Direct boot support for better reliability
-          directBootOk: true
+          // ✅ Collapse key for call notifications to replace previous ones
+          ...(notification.type === 'incoming_call' && {
+            collapseKey: 'incoming_call'
+          })
         },
         apns: {
           payload: {

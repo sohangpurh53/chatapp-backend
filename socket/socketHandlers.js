@@ -11,6 +11,7 @@ class SocketHandlers {
     this.typingUsers = new Map(); // chatId -> Set of userIds
     this.activeCalls = new Map(); // callId -> callData
     this.userCalls = new Map(); // userId -> callId
+    this.callTimeouts = new Map(); // callId -> timeoutId
   }
 
   handleConnection(socket) {
@@ -1309,6 +1310,13 @@ class SocketHandlers {
   // }
   async endCall(callId, reason = 'normal') {
     try {
+      // ✅ Clear call timeout if it exists
+      if (this.callTimeouts.has(callId)) {
+        clearTimeout(this.callTimeouts.get(callId));
+        this.callTimeouts.delete(callId);
+        console.log(`🧹 Cleared timeout for call ${callId}`);
+      }
+
       const callData = await redisService.getActiveCall(callId);
       if (!callData) {
         return;
