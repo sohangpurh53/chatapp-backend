@@ -114,7 +114,7 @@ class FCMService {
         });
       }
 
-      // Prepare FCM message
+      // Prepare FCM message with enhanced settings for calls
       const message = {
         token: user.fcmToken,
         notification: {
@@ -123,20 +123,51 @@ class FCMService {
         },
         data: dataPayload,
         android: {
-          priority: notification.priority || 'high',
+          // ✅ CRITICAL: Use 'high' priority for all call notifications
+          priority: notification.type === 'incoming_call' ? 'high' : (notification.priority || 'normal'),
+          // ✅ Enhanced notification settings for calls
           notification: {
             sound: prefs.soundEnabled !== false ? 'default' : undefined,
             channelId: this.getChannelId(notification.type),
-            priority: 'high',
-            defaultVibrateTimings: prefs.vibrationEnabled !== false
-          }
+            priority: notification.type === 'incoming_call' ? 'max' : 'high',
+            defaultVibrateTimings: prefs.vibrationEnabled !== false,
+            // ✅ NEW: Critical settings for incoming calls
+            ...(notification.type === 'incoming_call' && {
+              sticky: true, // Can't be dismissed by swipe
+              ongoing: true, // Persistent notification
+              autoCancel: false, // Don't auto-dismiss
+              timeoutAfter: 60000, // 60 seconds timeout
+              showWhen: true,
+              when: Date.now(),
+              // ✅ Full screen intent for calls (like WhatsApp)
+              fullScreenIntent: {
+                launchActivity: 'default'
+              }
+            })
+          },
+          // ✅ NEW: Direct boot support for better reliability
+          directBootOk: true
         },
         apns: {
           payload: {
             aps: {
               sound: prefs.soundEnabled !== false ? 'default' : undefined,
-              badge: 1
+              badge: 1,
+              // ✅ Critical alert for iOS calls
+              ...(notification.type === 'incoming_call' && {
+                'content-available': 1,
+                alert: {
+                  title: notification.title,
+                  body: notification.body
+                },
+                category: 'INCOMING_CALL'
+              })
             }
+          },
+          headers: {
+            // ✅ High priority for iOS
+            'apns-priority': notification.type === 'incoming_call' ? '10' : '5',
+            'apns-push-type': 'alert'
           }
         }
       };

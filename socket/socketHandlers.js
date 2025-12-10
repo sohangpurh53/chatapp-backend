@@ -868,117 +868,134 @@ class SocketHandlers {
         return;
       }
 
-      // ✅ ENHANCED: Send initial status to caller
-      socket.emit('call_status_update', {
-        callId,
-        status: 'calling',
-        receiverOnline: isReceiverOnline
-      });
+    // ✅ FIX: Send to receiver FIRST, then confirm to caller
+    const receiverSocketId = this.connectedUsers.get(receiverId);
+    const isReceiverOnline = !!receiverSocketId;
 
-      // ✅ SIMPLIFIED: Direct socket delivery for online users, FCM only for offline
-      if (isReceiverOnline && receiverSocketId) {
-        console.log(`📡 Receiver ${receiverId} is ONLINE, sending via Socket.IO ONLY`);
-        
-        // ✅ FIX: Ensure caller object has all required fields
-        const callerData = {
-          id: caller.id,
-          username: caller.username,
-          avatar: caller.avatar || null
-        };
-        
-        console.log('📦 Socket call data:', JSON.stringify({
-          callId,
-          caller: callerData,
-          callType,
-          chatId,
-          receiverId
-        }, null, 2));
-        
-        this.io.to(receiverSocketId).emit('incoming_call', {
-          callId,
-          caller: callerData,
-          callType,
-          chatId,
-          receiverId
-        });
-        console.log(`✅ Call delivered via socket - NO FCM needed`);
-        
-        // Update status to ringing
-        socket.emit('call_status_update', {
-          callId,
-          status: 'ringing',
-          receiverOnline: true
-        });
-      } else {
-        // User is offline - send FCM notification
-        console.log(`📱 Receiver ${receiverId} is OFFLINE, sending FCM notification`);
-        const fcmService = require('../services/fcmService');
-        
-        try {
-          // ✅ FIX: Use safe property access and ensure all data is present
-          const fcmData = {
-            type: 'incoming_call',
-            callId,
-            callerId: socket.userId,
-            receiverId,
-            callType,
-            chatId: chatId || '',
-            callerName: caller?.username || 'Unknown',
-            callerAvatar: caller?.avatar || ''
-          };
-          
-          console.log('📦 FCM notification data:', JSON.stringify(fcmData, null, 2));
-          
-          await fcmService.sendNotification(receiverId, {
-            title: `Incoming ${callType} call`,
-            body: `${caller?.username || 'Someone'} is calling you`,
-            data: fcmData,
-            android: {
-              priority: 'high',
-              channelId: 'calls',
-              category: 'call',
-              fullScreenIntent: true
-            }
-          });
-          console.log(`✅ FCM notification sent to offline user`);
-        } catch (fcmError) {
-          console.error(`❌ FCM failed for user ${receiverId}:`, fcmError.message);
-          console.error(`❌ FCM error stack:`, fcmError.stack);
-        }
-        
-        // Check if user comes online or call is answered within 10 seconds
-        setTimeout(async () => {
-          const currentCall = await redisService.getActiveCall(callId);
-          if (currentCall && currentCall.status === 'ringing') {
-            // Still ringing after 10 seconds - user might be unavailable
-            socket.emit('call_status_update', {
-              callId,
-              status: 'unavailable',
-              receiverOnline: false
-            });
-          }
-        }, 10000); // 10 seconds
-      }
-
-      // Confirm to caller and store call reference
-      socket.emit('call_initiated', {
+    if (isReceiverOnline && receiverSocketId) {
+      console.log(`📡 Receiver ${receiverId} is ONLINE, sending via Socket.IO`);
+      
+      const callerData = {
+        id: caller.id,
+        username: caller.username,
+        avatar: caller.avatar || null
+      };
+      
+      // ✅ CRITICAL: Include receiverId for verification
+      this.io.to(receiverSocketId).emit('incoming_call', {
         callId,
-        receiverId,
+        caller: callerData,
         callType,
-        status: isReceiverOnline ? 'ringing' : 'calling', // Different status for offline
-        receiverOnline: isReceiverOnline
+        chatId,
+        receiverId // ✅ ADD THIS for frontend validation
       });
+      
+      console.log(`✅ Socket event sent to receiver`);
+      
+      // ✅ Small delay to ensure receiver processes first
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+    } else {
+      console.log(`📱 Receiver ${receiverId} is OFFLINE, sending FCM with fallback strategy`);
+      const fcmService = require('../services/fcmService');
+      
+      try {
+        // ✅ PRIMARY: Send high-priority FCM notification
+        await fcmService.sendNotification(receiverId, {
+          title: `Incoming ${callType} call`,
+          body: `${caller.username} is calling you`,
+          type: 'incoming_call', // ✅ Add type to notification object
+          priority: 'high', // ✅ Explicit high priority
+          data: {
+            type: 'incoming_call',
+            callId: String(callId),
+            callerId: String(socket.userId),
+            receiverId: String(receiverId), // ✅ MUST be string
+            callType: String(callType),
+            chatId: chatId ? String(chatId) : '',
+            callerName: String(caller.username),
+            callerAvatar: String(caller.avatar || ''),
+            // ✅ NEW: Add timestamp for call expiry
+            timestamp: String(Date.now()),
+            action: 'incoming_call'
+          }
+        });
+        console.log(`✅ Primary FCM sent to offline user`);
+
+        // ✅ FALLBACK: Send secondary notification after 3 seconds if no response
+        setTimeout(async () => {
+          try {
+            const callStillActive = await redisService.getActiveCall(callId);
+            if (callStillActive && callStillActive.status === 'ringing') {
+              console.log(`📱 Sending fallback FCM for call ${callId}`);
+              await fcmService.sendNotification(receiverId, {
+                title: `Missed call attempt`,
+                body: `${caller.username} tried to call you`,
+                type: 'missed_call_attempt',
+                data: {
+                  type: 'missed_call_attempt',
+                  callId: String(callId),
+                  callerId: String(socket.userId),
+                  callerName: String(caller.username),
+                  action: 'open_app'
+                }
+              });
+            }
+          } catch (fallbackError) {
+            console.error('Fallback FCM failed:', fallbackError);
+          }
+        }, 3000);
+
+      } catch (fcmError) {
+        console.error(`❌ FCM failed:`, fcmError.message);
+        
+        // ✅ LAST RESORT: Try to queue call event for retry
+        try {
+          const { callEventQueue } = require('../config/queue');
+          await callEventQueue.add('incoming_call_retry', {
+            eventType: 'incoming_call',
+            callId,
+            targetUserId: receiverId,
+            callData: {
+              callId,
+              callerId: socket.userId,
+              receiverId,
+              callType,
+              chatId,
+              callerName: caller.username,
+              callerAvatar: caller.avatar
+            }
+          }, {
+            priority: 1,
+            delay: 2000, // Retry after 2 seconds
+            attempts: 3
+          });
+          console.log(`📬 Call queued for retry`);
+        } catch (queueError) {
+          console.error('Failed to queue call retry:', queueError);
+        }
+      }
+    }
+
+    // ✅ NOW confirm to caller (after receiver was notified)
+    socket.emit('call_initiated', {
+      callId,
+      receiverId,
+      callType,
+      status: isReceiverOnline ? 'ringing' : 'calling',
+      receiverOnline: isReceiverOnline
+    });
 
       // Store the call ID in the socket for easy access
       socket.currentCallId = callId;
 
-      // Set timeout for missed call
-      setTimeout(async () => {
-        const currentCall = await redisService.getActiveCall(callId);
-        if (currentCall && currentCall.status === 'ringing') {
-          await this.handleMissedCall(callId);
-        }
-      }, 30000); // 30 seconds timeout
+    // Set timeout for missed call
+    setTimeout(async () => {
+      const currentCall = await redisService.getActiveCall(callId);
+      if (currentCall && currentCall.status === 'ringing') {
+        await this.handleMissedCall(callId);
+      }
+    }, 30000);
 
     } catch (error) {
       console.error('Initiate call error:', error);
