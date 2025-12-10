@@ -666,38 +666,11 @@ class SocketHandlers {
   async handleDisconnect(socket) {
     console.log(`User ${socket.user.username} disconnected`);
 
-    // ✅ FIX: Handle active call cleanup more robustly
-    const userCallId = this.userCalls?.get(socket?.userId);
-    if (userCallId) {
-      console.log(`🧹 Cleaning up active call ${userCallId} for disconnected user ${socket.userId}`);
-      
-      // Get call data before ending
-      const callData = await redisService.getActiveCall(userCallId);
-      
-      // End the call
-      await this.endCall(userCallId, 'network_error');
-
-      // Notify other participant about disconnection
-      if (callData) {
-        const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
-        const otherSocketId = this.connectedUsers.get(otherUserId);
-
-        if (otherSocketId) {
-          console.log(`📡 Notifying other user ${otherUserId} about call end`);
-          this.io.to(otherSocketId).emit('call_ended', {
-            callId: userCallId,
-            endedBy: socket.userId,
-            reason: 'network_error'
-          });
-        }
-      }
-    }
-    
-    // ✅ FIX: Also check Redis for any stale call status
-    const redisCallId = await redisService.getUserCallStatus(socket.userId);
-    if (redisCallId && redisCallId !== userCallId) {
-      console.warn(`⚠️  Found stale call status in Redis for user ${socket.userId}, cleaning up...`);
-      await redisService.deleteUserCallStatus(socket.userId);
+    try {
+      // ✅ COMPREHENSIVE CALL CLEANUP
+      await this.cleanupUserCallState(socket.userId, 'network_error');
+    } catch (error) {
+      console.error(`❌ Error cleaning up call state for user ${socket.userId}:`, error);
     }
 
     // Remove from connected users
@@ -1308,6 +1281,105 @@ class SocketHandlers {
   //     console.error('End call cleanup error:', error);
   //   }
   // }
+  /**
+   * ✅ NEW: Comprehensive user call state cleanup
+   */
+  async cleanupUserCallState(userId, reason = 'normal') {
+    try {
+      console.log(`🧹 Starting comprehensive cleanup for user ${userId}`);
+
+      // 1. Check memory maps first
+      const userCallId = this.userCalls.get(userId);
+      
+      // 2. Check Redis for any call status
+      const redisCallId = await redisService.getUserCallStatus(userId);
+      
+      // 3. Use whichever call ID we found
+      const callIdToClean = userCallId || redisCallId;
+      
+      if (callIdToClean) {
+        console.log(`🧹 Found active call ${callIdToClean} for user ${userId}`);
+        
+        // Get call data before cleanup
+        const callData = await redisService.getActiveCall(callIdToClean) || 
+                         this.activeCalls.get(callIdToClean);
+        
+        // End the call properly
+        await this.endCall(callIdToClean, reason);
+
+        // Notify other participant if they exist and are online
+        if (callData) {
+          const otherUserId = callData.callerId === userId ? callData.receiverId : callData.callerId;
+          const otherSocketId = this.connectedUsers.get(otherUserId);
+
+          if (otherSocketId) {
+            console.log(`📡 Notifying other user ${otherUserId} about call end`);
+            this.io.to(otherSocketId).emit('call_ended', {
+              callId: callIdToClean,
+              endedBy: userId,
+              reason: reason
+            });
+          }
+        }
+      }
+      
+      // 4. Force cleanup any remaining state
+      await this.forceCleanupUserState(userId);
+      
+      console.log(`✅ Comprehensive cleanup completed for user ${userId}`);
+      
+    } catch (error) {
+      console.error(`❌ Error in comprehensive cleanup for user ${userId}:`, error);
+      // Still try force cleanup
+      await this.forceCleanupUserState(userId);
+    }
+  }
+
+  /**
+   * ✅ NEW: Force cleanup user state (emergency cleanup)
+   */
+  async forceCleanupUserState(userId) {
+    try {
+      console.log(`🚨 Force cleanup for user ${userId}`);
+      
+      // Clear from memory maps
+      const callId = this.userCalls.get(userId);
+      if (callId) {
+        this.activeCalls.delete(callId);
+        this.userCalls.delete(userId);
+        
+        // Clear timeout if exists
+        if (this.callTimeouts.has(callId)) {
+          clearTimeout(this.callTimeouts.get(callId));
+          this.callTimeouts.delete(callId);
+        }
+      }
+      
+      // Clear from Redis
+      await redisService.deleteUserCallStatus(userId);
+      
+      // Find and clear any calls where this user is a participant
+      for (const [cId, cData] of this.activeCalls.entries()) {
+        if (cData.callerId === userId || cData.receiverId === userId) {
+          this.activeCalls.delete(cId);
+          this.userCalls.delete(cData.callerId);
+          this.userCalls.delete(cData.receiverId);
+          await redisService.deleteActiveCall(cId);
+          
+          if (this.callTimeouts.has(cId)) {
+            clearTimeout(this.callTimeouts.get(cId));
+            this.callTimeouts.delete(cId);
+          }
+        }
+      }
+      
+      console.log(`✅ Force cleanup completed for user ${userId}`);
+      
+    } catch (error) {
+      console.error(`❌ Force cleanup failed for user ${userId}:`, error);
+    }
+  }
+
   async endCall(callId, reason = 'normal') {
     try {
       // ✅ Clear call timeout if it exists
@@ -1319,6 +1391,8 @@ class SocketHandlers {
 
       const callData = await redisService.getActiveCall(callId);
       if (!callData) {
+        // Still try to clean up memory state
+        this.activeCalls.delete(callId);
         return;
       }
 
