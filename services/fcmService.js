@@ -229,6 +229,7 @@ class FCMService {
     switch (type) {
       case 'incoming_call':
       case 'missed_call':
+      case 'call_ended':
         return preferences.calls !== false;
       case 'new_message':
         return preferences.messages !== false;
@@ -244,6 +245,7 @@ class FCMService {
     switch (type) {
       case 'incoming_call':
       case 'missed_call':
+      case 'call_ended':
         return 'calls';
       case 'new_message':
         return 'messages';

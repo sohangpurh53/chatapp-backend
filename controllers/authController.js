@@ -218,12 +218,46 @@ const getEncryptedPrivateKey = async (req, res) => {
   }
 };
 
+// ✅ NEW: Get user info by ID (for call participant details)
+const getUserInfo = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Basic validation
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+    
+    const user = await User.findByPk(userId, {
+      attributes: ['id', 'username', 'avatar', 'isOnline', 'lastSeen']
+    });
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json({
+      data: {
+        id: user.id,
+        username: user.username,
+        avatar: user.avatar,
+        isOnline: user.isOnline,
+        lastSeen: user.lastSeen
+      }
+    });
+  } catch (error) {
+    console.error('Get user info error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   register,
   login,
   logout,
   getProfile,
   getUserPublicKey,
+  getUserInfo,
   uploadKeys,
   getEncryptedPrivateKey
 };

@@ -1062,10 +1062,13 @@ class SocketHandlers {
       }
 
       console.log(`🔚 User ${socket.userId} ending call ${callId}`);
+      console.log(`📊 Call participants: ${callData.callerId} -> ${callData.receiverId}`);
 
       // ✅ CRITICAL: Notify other participant BEFORE ending call
       const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
       const otherSocketId = this.connectedUsers.get(otherUserId);
+
+      console.log(`🔍 Other user: ${otherUserId}, Socket ID: ${otherSocketId ? 'ONLINE' : 'OFFLINE'}`);
 
       // Always try to notify the other user first
       if (otherSocketId) {
@@ -1075,12 +1078,13 @@ class SocketHandlers {
           endedBy: socket.userId,
           reason: 'user_ended'
         });
+        console.log(`✅ Socket.IO call_ended event sent to ${otherUserId}`);
       } else {
         console.log(`📱 Other user ${otherUserId} offline, sending FCM call end notification`);
         // ✅ NEW: Send FCM notification for call end to offline users
         try {
           const fcmService = require('../services/fcmService');
-          await fcmService.sendNotification(otherUserId, {
+          const fcmResult = await fcmService.sendNotification(otherUserId, {
             title: 'Call ended',
             body: 'The call has ended',
             type: 'call_ended',
@@ -1092,7 +1096,13 @@ class SocketHandlers {
               action: 'call_ended'
             }
           });
-          console.log(`✅ FCM call end notification sent to user ${otherUserId}`);
+          
+          if (fcmResult.success) {
+            console.log(`✅ FCM call end notification sent to user ${otherUserId}`);
+            console.log(`📬 FCM Message ID: ${fcmResult.messageId}`);
+          } else {
+            console.log(`⚠️  FCM call end notification failed: ${fcmResult.reason}`);
+          }
         } catch (fcmError) {
           console.error(`❌ Failed to send FCM call end notification:`, fcmError);
         }

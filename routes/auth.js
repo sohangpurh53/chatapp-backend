@@ -7,6 +7,7 @@ const {
   logout,
   getProfile,
   getUserPublicKey,
+  getUserInfo,
   uploadKeys,
   getEncryptedPrivateKey
 } = require('../controllers/authController');
@@ -16,6 +17,7 @@ router.post('/login', login);
 router.post('/logout', authenticateToken, logout);
 router.get('/profile', authenticateToken, getProfile);
 router.get('/users/:userId/public-key', authenticateToken, getUserPublicKey);
+router.get('/users/:userId', authenticateToken, getUserInfo);
 
 // Encryption key management endpoints
 router.post('/keys', authenticateToken, uploadKeys);
