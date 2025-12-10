@@ -821,7 +821,7 @@ class SocketHandlers {
 
       // Check if receiver is online (for Socket.IO delivery)
       const receiverSocketId = this.connectedUsers.get(receiverId);
-      const isReceiverOnline = !!receiverSocketId;
+      // const isReceiverOnline = !!receiverSocketId;
 
       // Create call record
       const call = await Call.create({
@@ -869,7 +869,7 @@ class SocketHandlers {
       }
 
     // ✅ FIX: Send to receiver FIRST, then confirm to caller
-    const receiverSocketId = this.connectedUsers.get(receiverId);
+    // const receiverSocketId = this.connectedUsers.get(receiverId);
     const isReceiverOnline = !!receiverSocketId;
 
     if (isReceiverOnline && receiverSocketId) {
