@@ -1050,6 +1050,8 @@ class SocketHandlers {
 
       const callData = await redisService.getActiveCall(callId);
       if (!callData) {
+        console.warn(`Call ${callId} not found when trying to end`);
+        socket.emit('call_ended', { callId, endedBy: socket.userId, reason: 'not_found' });
         return;
       }
 
@@ -1059,19 +1061,54 @@ class SocketHandlers {
         return;
       }
 
-      await this.endCall(callId, 'normal');
+      console.log(`🔚 User ${socket.userId} ending call ${callId}`);
 
-      // Notify other participant
+      // ✅ CRITICAL: Notify other participant BEFORE ending call
       const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
       const otherSocketId = this.connectedUsers.get(otherUserId);
 
+      // Always try to notify the other user first
       if (otherSocketId) {
+        console.log(`📡 Notifying other user ${otherUserId} about call end via Socket.IO`);
         this.io.to(otherSocketId).emit('call_ended', {
           callId,
           endedBy: socket.userId,
           reason: 'user_ended'
         });
+      } else {
+        console.log(`📱 Other user ${otherUserId} offline, sending FCM call end notification`);
+        // ✅ NEW: Send FCM notification for call end to offline users
+        try {
+          const fcmService = require('../services/fcmService');
+          await fcmService.sendNotification(otherUserId, {
+            title: 'Call ended',
+            body: 'The call has ended',
+            type: 'call_ended',
+            data: {
+              type: 'call_ended',
+              callId: String(callId),
+              endedBy: String(socket.userId),
+              reason: 'user_ended',
+              action: 'call_ended'
+            }
+          });
+          console.log(`✅ FCM call end notification sent to user ${otherUserId}`);
+        } catch (fcmError) {
+          console.error(`❌ Failed to send FCM call end notification:`, fcmError);
+        }
       }
+
+      // Now end the call
+      await this.endCall(callId, 'normal');
+
+      // Confirm to the user who ended the call
+      socket.emit('call_ended', {
+        callId,
+        endedBy: socket.userId,
+        reason: 'user_ended'
+      });
+
+      console.log(`✅ Call ${callId} ended successfully`);
 
     } catch (error) {
       console.error('End call error:', error);
