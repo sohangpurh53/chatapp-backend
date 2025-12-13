@@ -890,104 +890,9 @@ class SocketHandlers {
       await new Promise(resolve => setTimeout(resolve, 100));
       
     } else {
-      console.log(`📱 Receiver ${receiverId} is OFFLINE, sending FCM with fallback strategy`);
-      const fcmService = require('../services/fcmService');
-      
-      try {
-        // ✅ PRIMARY: Send high-priority FCM notification
-        // If we already persisted an offer for this call, attach it to the FCM payload
-        let attachedOffer = null;
-        try {
-          const pendingSignals = await redisService.getPendingSignalsForUser(receiverId);
-          const signalsForCall = pendingSignals[String(callId)] || [];
-          const offerSignal = signalsForCall.find(s => s.type === 'offer');
-          if (offerSignal) {
-            attachedOffer = offerSignal.payload;
-          }
-        } catch (err) {
-          console.warn('Could not check for pending signals to attach to FCM:', err);
-        }
-
-        const payload = {
-          title: `Incoming ${callType} call`,
-          body: `${caller.username} is calling you`,
-          type: 'incoming_call', // ✅ Add type to notification object
-          priority: 'high', // ✅ Explicit high priority
-          data: {
-            type: 'incoming_call',
-            callId: String(callId),
-            callerId: String(socket.userId),
-            receiverId: String(receiverId), // ✅ MUST be string
-            callType: String(callType),
-            chatId: chatId ? String(chatId) : '',
-            callerName: String(caller.username),
-            callerAvatar: String(caller.avatar || ''),
-            // ✅ NEW: Add timestamp for call expiry
-            timestamp: String(Date.now()),
-            action: 'incoming_call'
-          }
-        };
-
-        if (attachedOffer) {
-          payload.data.offer = JSON.stringify(attachedOffer);
-        }
-
-        await fcmService.sendNotification(receiverId, payload);
-        console.log(`✅ Primary FCM sent to offline user`);
-
-        // ✅ FALLBACK: Send secondary notification after 3 seconds if no response
-        setTimeout(async () => {
-          try {
-            const callStillActive = await redisService.getActiveCall(callId);
-            if (callStillActive && callStillActive.status === 'ringing') {
-              console.log(`📱 Sending fallback FCM for call ${callId}`);
-              await fcmService.sendNotification(receiverId, {
-                title: `Missed call attempt`,
-                body: `${caller.username} tried to call you`,
-                type: 'missed_call_attempt',
-                data: {
-                  type: 'missed_call_attempt',
-                  callId: String(callId),
-                  callerId: String(socket.userId),
-                  callerName: String(caller.username),
-                  action: 'open_app'
-                }
-              });
-            }
-          } catch (fallbackError) {
-            console.error('Fallback FCM failed:', fallbackError);
-          }
-        }, 3000);
-
-      } catch (fcmError) {
-        console.error(`❌ FCM failed:`, fcmError.message);
-        
-        // ✅ LAST RESORT: Try to queue call event for retry
-        try {
-          const { callEventQueue } = require('../config/queue');
-          await callEventQueue.add('incoming_call_retry', {
-            eventType: 'incoming_call',
-            callId,
-            targetUserId: receiverId,
-            callData: {
-              callId,
-              callerId: socket.userId,
-              receiverId,
-              callType,
-              chatId,
-              callerName: caller.username,
-              callerAvatar: caller.avatar
-            }
-          }, {
-            priority: 1,
-            delay: 2000, // Retry after 2 seconds
-            attempts: 3
-          });
-          console.log(`📬 Call queued for retry`);
-        } catch (queueError) {
-          console.error('Failed to queue call retry:', queueError);
-        }
-      }
+      console.log(`📱 Receiver ${receiverId} is OFFLINE - will send FCM when SDP offer arrives`);
+      // ✅ SIMPLIFIED: FCM with signal data will be sent by handleCallSignal when offer arrives
+      // This ensures the FCM notification contains the actual SDP offer data
     }
 
     // ✅ NOW confirm to caller (after receiver was notified)
@@ -1177,59 +1082,121 @@ class SocketHandlers {
     try {
       const { callId, signal, targetUserId } = data;
 
+      console.log(`📡 Handling call signal: ${signal.type} for call ${callId} to user ${targetUserId}`);
+
       const callData = await redisService.getActiveCall(callId);
       if (!callData) {
+        console.warn(`⚠️  No active call found for callId ${callId}`);
         return;
       }
 
-      // Forward signal to target user
+      // ✅ ENHANCED: Validate signal data
+      if (!signal || !signal.type) {
+        console.error(`❌ Invalid signal data for call ${callId}`);
+        socket.emit('call_error', { message: 'Invalid signal data' });
+        return;
+      }
+
+      // Check if target user is online
       const targetSocketId = this.connectedUsers.get(targetUserId);
-      if (targetSocketId) {
+      const isTargetOnline = !!targetSocketId;
+
+      if (isTargetOnline) {
+        // ✅ Target is online - direct delivery
+        console.log(`📤 Target ${targetUserId} is ONLINE - direct signal delivery`);
         this.io.to(targetSocketId).emit('call_signal', {
           callId,
           signal,
           fromUserId: socket.userId
         });
-      } else {
-        // Target is offline: persist the signal for later delivery
-        console.log(`📥 Target ${targetUserId} offline - persisting signal for call ${callId}`);
-        await redisService.pushPendingSignal(targetUserId, callId, {
-          type: signal.type,
-          payload: signal
+        
+        // ✅ Confirm delivery to sender
+        socket.emit('signal_delivered', {
+          callId,
+          targetUserId,
+          signalType: signal.type,
+          deliveryMethod: 'socket'
         });
+      } else {
+        // ✅ Target is offline - enhanced persistence and FCM delivery
+        console.log(`📥 Target ${targetUserId} is OFFLINE - persisting signal and sending FCM`);
+        
+        // Store signal with enhanced metadata
+        const signalData = {
+          type: signal.type,
+          payload: signal,
+          fromUserId: socket.userId,
+          timestamp: Date.now(),
+          callId: callId
+        };
 
-        // If this is an offer, proactively send an FCM with offer attached
-        if (signal.type === 'offer') {
-          try {
-            const fcmService = require('../services/fcmService');
-            await fcmService.sendNotification(targetUserId, {
-              title: `Incoming ${callData.callType} call`,
-              body: `Incoming call from ${socket.userId}`,
-              type: 'incoming_call',
-              priority: 'high',
-              data: {
-                type: 'incoming_call',
-                callId: String(callId),
-                callerId: String(socket.userId),
-                receiverId: String(targetUserId),
-                callType: String(callData.callType),
-                chatId: callData.chatId ? String(callData.chatId) : '',
-                callerName: String(callData.callerName || ''),
-                callerAvatar: String(callData.callerAvatar || ''),
-                offer: JSON.stringify(signal),
-                timestamp: String(Date.now()),
-                action: 'incoming_call'
-              }
-            });
-            console.log(`✅ Sent FCM with offer to offline user ${targetUserId}`);
-          } catch (fcmErr) {
-            console.error('Error sending FCM with offer to offline user:', fcmErr);
-          }
-        }
+        await redisService.pushPendingSignal(targetUserId, callId, signalData);
+        console.log(`💾 Signal ${signal.type} stored in Redis for offline user ${targetUserId}`);
+
+        // ✅ CRITICAL: Send FCM with signal data for ALL signal types
+        await this.sendSignalViaFCM(targetUserId, callId, signal, callData, socket.userId);
+        
+        // ✅ Confirm storage to sender
+        socket.emit('signal_stored', {
+          callId,
+          targetUserId,
+          signalType: signal.type,
+          deliveryMethod: 'fcm_pending'
+        });
       }
 
     } catch (error) {
-      console.error('Call signal error:', error);
+      console.error('❌ Call signal error:', error);
+      socket.emit('call_error', { message: 'Signal delivery failed' });
+    }
+  }
+
+  /**
+   * ✅ NEW: Enhanced FCM delivery with signal data
+   */
+  async sendSignalViaFCM(targetUserId, callId, signal, callData, fromUserId) {
+    try {
+      const fcmService = require('../services/fcmService');
+      
+      // Get caller information
+      const caller = await User.findByPk(fromUserId, {
+        attributes: ['id', 'username', 'avatar']
+      });
+
+      if (!caller) {
+        console.error(`❌ Caller ${fromUserId} not found for FCM delivery`);
+        return;
+      }
+
+      // ✅ Prepare enhanced FCM payload with signal data
+      const fcmPayload = {
+        title: `Incoming ${callData.callType} call`,
+        body: `${caller.username} is calling you`,
+        type: 'incoming_call_with_signal',
+        priority: 'high',
+        data: {
+          type: 'incoming_call_with_signal',
+          callId: String(callId),
+          callerId: String(fromUserId),
+          receiverId: String(targetUserId),
+          callType: String(callData.callType),
+          chatId: callData.chatId ? String(callData.chatId) : '',
+          callerName: String(caller.username),
+          callerAvatar: String(caller.avatar || ''),
+          // ✅ CRITICAL: Include signal data in FCM payload
+          signalType: String(signal.type),
+          signalData: JSON.stringify(signal),
+          timestamp: String(Date.now()),
+          action: 'incoming_call_with_signal'
+        }
+      };
+
+      await fcmService.sendNotification(targetUserId, fcmPayload);
+      console.log(`✅ FCM with ${signal.type} signal sent to offline user ${targetUserId}`);
+
+    } catch (error) {
+      console.error(`❌ Error sending FCM with signal to user ${targetUserId}:`, error);
+      throw error;
     }
   }
 

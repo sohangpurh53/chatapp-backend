@@ -14,6 +14,8 @@
     "test-api": "node test-api.js",
     "test-socket": "node test-socket.js",
     "test-notifications": "node test-notifications.js",
+    "test-offline-calling": "node scripts/test-offline-calling.js",
+    "cleanup-signals": "node scripts/cleanup-expired-signals.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [

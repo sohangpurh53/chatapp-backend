@@ -122,11 +122,26 @@ class RedisService {
   }
 
   // Pending signals storage (for offline delivery)
-  async pushPendingSignal(targetUserId, callId, signal, ttl = 7200) {
+  async pushPendingSignal(targetUserId, callId, signal, ttl = 300) {
     try {
       const key = `pending_signals:${targetUserId}:${callId}`;
-      await this.client.rpush(key, JSON.stringify(signal));
-      await this.client.expire(key, ttl);
+      
+      // ✅ Enhanced signal storage with validation
+      const signalWithMetadata = {
+        ...signal,
+        storedAt: Date.now(),
+        expiresAt: Date.now() + (ttl * 1000)
+      };
+
+      await this.client.rpush(key, JSON.stringify(signalWithMetadata));
+      await this.client.expire(key, ttl); // 5 minutes TTL for calls
+      
+      // ✅ Also maintain user pending signals index
+      const userIndexKey = `user_pending_signals:${targetUserId}`;
+      await this.client.sadd(userIndexKey, callId);
+      await this.client.expire(userIndexKey, ttl);
+      
+      console.log(`💾 Signal ${signal.type} stored for user ${targetUserId}, call ${callId} (TTL: ${ttl}s)`);
     } catch (error) {
       console.error('Redis pushPendingSignal error:', error);
     }
@@ -136,11 +151,31 @@ class RedisService {
     try {
       const keys = await this.client.keys(`pending_signals:${userId}:*`);
       const all = {};
+      const now = Date.now();
+      
       for (const key of keys) {
         const callId = key.split(':').pop();
         const items = await this.client.lrange(key, 0, -1);
-        all[callId] = items.map(i => JSON.parse(i));
+        
+        // ✅ Filter out expired signals
+        const validSignals = items
+          .map(i => JSON.parse(i))
+          .filter(signal => {
+            if (signal.expiresAt && signal.expiresAt < now) {
+              console.log(`🗑️  Filtering expired signal for call ${callId}`);
+              return false;
+            }
+            return true;
+          });
+        
+        if (validSignals.length > 0) {
+          all[callId] = validSignals;
+        } else {
+          // Clean up empty/expired signal list
+          await this.client.del(key);
+        }
       }
+      
       return all; // { callId: [signal, ...] }
     } catch (error) {
       console.error('Redis getPendingSignalsForUser error:', error);
@@ -152,8 +187,85 @@ class RedisService {
     try {
       const key = `pending_signals:${userId}:${callId}`;
       await this.client.del(key);
+      
+      // ✅ Also remove from user index
+      const userIndexKey = `user_pending_signals:${userId}`;
+      await this.client.srem(userIndexKey, callId);
+      
+      console.log(`🗑️  Deleted pending signals for user ${userId}, call ${callId}`);
     } catch (error) {
       console.error('Redis deletePendingSignals error:', error);
+    }
+  }
+
+  /**
+   * ✅ NEW: Validate SDP offer format
+   */
+  validateSignalData(signal) {
+    if (!signal || typeof signal !== 'object') {
+      return { valid: false, error: 'Signal must be an object' };
+    }
+
+    if (!signal.type || !['offer', 'answer', 'ice-candidate'].includes(signal.type)) {
+      return { valid: false, error: 'Invalid signal type' };
+    }
+
+    if (signal.type === 'offer' || signal.type === 'answer') {
+      if (!signal.sdp || typeof signal.sdp !== 'string') {
+        return { valid: false, error: 'SDP data is required for offer/answer' };
+      }
+      
+      // Basic SDP validation
+      if (!signal.sdp.includes('v=0') || !signal.sdp.includes('m=')) {
+        return { valid: false, error: 'Invalid SDP format' };
+      }
+    }
+
+    if (signal.type === 'ice-candidate') {
+      if (!signal.candidate && signal.candidate !== null) {
+        return { valid: false, error: 'ICE candidate data is required' };
+      }
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * ✅ NEW: Cleanup expired signals (run periodically)
+   */
+  async cleanupExpiredSignals() {
+    try {
+      const pattern = 'pending_signals:*';
+      const keys = await this.client.keys(pattern);
+      let cleanedCount = 0;
+      
+      for (const key of keys) {
+        const ttl = await this.client.ttl(key);
+        if (ttl === -1 || ttl === 0) {
+          // Key has no TTL or is expired
+          await this.client.del(key);
+          cleanedCount++;
+        }
+      }
+      
+      // Also cleanup user indexes
+      const userIndexKeys = await this.client.keys('user_pending_signals:*');
+      for (const key of userIndexKeys) {
+        const ttl = await this.client.ttl(key);
+        if (ttl === -1 || ttl === 0) {
+          await this.client.del(key);
+          cleanedCount++;
+        }
+      }
+      
+      if (cleanedCount > 0) {
+        console.log(`🧹 Cleaned up ${cleanedCount} expired signal keys`);
+      }
+      
+      return cleanedCount;
+    } catch (error) {
+      console.error('Redis cleanupExpiredSignals error:', error);
+      return 0;
     }
   }
 

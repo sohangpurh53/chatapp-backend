@@ -109,7 +109,21 @@ class FCMService {
         Object.keys(notification.data).forEach(key => {
           const value = notification.data[key];
           if (value !== null && value !== undefined) {
-            dataPayload[key] = typeof value === 'string' ? value : JSON.stringify(value);
+            // ✅ Handle large signal data with compression check
+            if (key === 'signalData' && typeof value === 'string') {
+              // Check payload size limit (FCM has 4KB limit)
+              if (value.length > 3000) {
+                console.warn(`⚠️  Signal data too large (${value.length} chars), truncating for FCM`);
+                dataPayload[key] = JSON.stringify({ 
+                  type: 'truncated', 
+                  message: 'Signal data too large for FCM, will be delivered via socket' 
+                });
+              } else {
+                dataPayload[key] = value;
+              }
+            } else {
+              dataPayload[key] = typeof value === 'string' ? value : JSON.stringify(value);
+            }
           }
         });
       }
