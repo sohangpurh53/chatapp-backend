@@ -14,7 +14,7 @@ class SocketHandlers {
     this.callTimeouts = new Map(); // callId -> timeoutId
   }
 
-  handleConnection(socket) {
+  async handleConnection(socket) {
     console.log(`User ${socket.user.username} (${socket.userId}) connected with socket ${socket.id}`);
 
     // Store user connection
@@ -36,6 +36,26 @@ class SocketHandlers {
     });
     
     console.log(`[ONLINE USERS] Total online: ${onlineUserIds.length}`);
+
+    // Deliver any pending signals that were stored while user was offline
+    try {
+      const pending = await redisService.getPendingSignalsForUser(socket.userId);
+      for (const callId of Object.keys(pending)) {
+        const signals = pending[callId];
+        for (const sig of signals) {
+          console.log(`📤 Delivering pending signal for call ${callId} to user ${socket.userId}`);
+          socket.emit('call_signal', {
+            callId,
+            signal: sig.payload,
+            fromUserId: sig.payload.fromUserId || null
+          });
+        }
+        // Remove delivered pending signals
+        await redisService.deletePendingSignals(socket.userId, callId);
+      }
+    } catch (err) {
+      console.error('Error delivering pending signals on connect:', err);
+    }
 
     // Handle events
     socket.on('join_chat', (data) => this.handleJoinChat(socket, data));
@@ -875,7 +895,20 @@ class SocketHandlers {
       
       try {
         // ✅ PRIMARY: Send high-priority FCM notification
-        await fcmService.sendNotification(receiverId, {
+        // If we already persisted an offer for this call, attach it to the FCM payload
+        let attachedOffer = null;
+        try {
+          const pendingSignals = await redisService.getPendingSignalsForUser(receiverId);
+          const signalsForCall = pendingSignals[String(callId)] || [];
+          const offerSignal = signalsForCall.find(s => s.type === 'offer');
+          if (offerSignal) {
+            attachedOffer = offerSignal.payload;
+          }
+        } catch (err) {
+          console.warn('Could not check for pending signals to attach to FCM:', err);
+        }
+
+        const payload = {
           title: `Incoming ${callType} call`,
           body: `${caller.username} is calling you`,
           type: 'incoming_call', // ✅ Add type to notification object
@@ -893,7 +926,13 @@ class SocketHandlers {
             timestamp: String(Date.now()),
             action: 'incoming_call'
           }
-        });
+        };
+
+        if (attachedOffer) {
+          payload.data.offer = JSON.stringify(attachedOffer);
+        }
+
+        await fcmService.sendNotification(receiverId, payload);
         console.log(`✅ Primary FCM sent to offline user`);
 
         // ✅ FALLBACK: Send secondary notification after 3 seconds if no response
@@ -1120,6 +1159,14 @@ class SocketHandlers {
 
       console.log(`✅ Call ${callId} ended successfully`);
 
+      // Clean up pending signals related to this call
+      try {
+        await redisService.deletePendingSignals(callData.callerId, callId);
+        await redisService.deletePendingSignals(callData.receiverId, callId);
+      } catch (err) {
+        console.warn('Error deleting pending signals on call end:', err);
+      }
+
     } catch (error) {
       console.error('End call error:', error);
       socket.emit('call_error', { message: 'Failed to end call' });
@@ -1143,6 +1190,42 @@ class SocketHandlers {
           signal,
           fromUserId: socket.userId
         });
+      } else {
+        // Target is offline: persist the signal for later delivery
+        console.log(`📥 Target ${targetUserId} offline - persisting signal for call ${callId}`);
+        await redisService.pushPendingSignal(targetUserId, callId, {
+          type: signal.type,
+          payload: signal
+        });
+
+        // If this is an offer, proactively send an FCM with offer attached
+        if (signal.type === 'offer') {
+          try {
+            const fcmService = require('../services/fcmService');
+            await fcmService.sendNotification(targetUserId, {
+              title: `Incoming ${callData.callType} call`,
+              body: `Incoming call from ${socket.userId}`,
+              type: 'incoming_call',
+              priority: 'high',
+              data: {
+                type: 'incoming_call',
+                callId: String(callId),
+                callerId: String(socket.userId),
+                receiverId: String(targetUserId),
+                callType: String(callData.callType),
+                chatId: callData.chatId ? String(callData.chatId) : '',
+                callerName: String(callData.callerName || ''),
+                callerAvatar: String(callData.callerAvatar || ''),
+                offer: JSON.stringify(signal),
+                timestamp: String(Date.now()),
+                action: 'incoming_call'
+              }
+            });
+            console.log(`✅ Sent FCM with offer to offline user ${targetUserId}`);
+          } catch (fcmErr) {
+            console.error('Error sending FCM with offer to offline user:', fcmErr);
+          }
+        }
       }
 
     } catch (error) {

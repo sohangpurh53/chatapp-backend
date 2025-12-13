@@ -121,6 +121,42 @@ class RedisService {
     }
   }
 
+  // Pending signals storage (for offline delivery)
+  async pushPendingSignal(targetUserId, callId, signal, ttl = 7200) {
+    try {
+      const key = `pending_signals:${targetUserId}:${callId}`;
+      await this.client.rpush(key, JSON.stringify(signal));
+      await this.client.expire(key, ttl);
+    } catch (error) {
+      console.error('Redis pushPendingSignal error:', error);
+    }
+  }
+
+  async getPendingSignalsForUser(userId) {
+    try {
+      const keys = await this.client.keys(`pending_signals:${userId}:*`);
+      const all = {};
+      for (const key of keys) {
+        const callId = key.split(':').pop();
+        const items = await this.client.lrange(key, 0, -1);
+        all[callId] = items.map(i => JSON.parse(i));
+      }
+      return all; // { callId: [signal, ...] }
+    } catch (error) {
+      console.error('Redis getPendingSignalsForUser error:', error);
+      return {};
+    }
+  }
+
+  async deletePendingSignals(userId, callId) {
+    try {
+      const key = `pending_signals:${userId}:${callId}`;
+      await this.client.del(key);
+    } catch (error) {
+      console.error('Redis deletePendingSignals error:', error);
+    }
+  }
+
   // Cache recent messages
   async cacheMessage(chatId, message, ttl = 86400) {
     try {
