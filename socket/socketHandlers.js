@@ -1119,7 +1119,7 @@ class SocketHandlers {
         });
       } else {
         // ✅ Target is offline - enhanced persistence and FCM delivery
-        console.log(`📥 Target ${targetUserId} is OFFLINE - persisting signal and sending FCM`);
+        console.log(`📥 Target ${targetUserId} is OFFLINE - persisting signal`);
         
         // Store signal with enhanced metadata
         const signalData = {
@@ -1133,15 +1133,20 @@ class SocketHandlers {
         await redisService.pushPendingSignal(targetUserId, callId, signalData);
         console.log(`💾 Signal ${signal.type} stored in Redis for offline user ${targetUserId}`);
 
-        // ✅ CRITICAL: Send FCM with signal data for ALL signal types
-        await this.sendSignalViaFCM(targetUserId, callId, signal, callData, socket.userId);
+        // ✅ CRITICAL: Only send FCM for OFFER signals (not ICE candidates)
+        if (signal.type === 'offer') {
+          console.log(`📱 Sending FCM notification for offer signal`);
+          await this.sendSignalViaFCM(targetUserId, callId, signal, callData, socket.userId);
+        } else {
+          console.log(`📝 Signal ${signal.type} stored but no FCM sent (not an offer)`);
+        }
         
         // ✅ Confirm storage to sender
         socket.emit('signal_stored', {
           callId,
           targetUserId,
           signalType: signal.type,
-          deliveryMethod: 'fcm_pending'
+          deliveryMethod: signal.type === 'offer' ? 'fcm_pending' : 'redis_only'
         });
       }
 
@@ -1156,6 +1161,15 @@ class SocketHandlers {
    */
   async sendSignalViaFCM(targetUserId, callId, signal, callData, fromUserId) {
     try {
+      // ✅ Rate limiting: Check if we already sent FCM for this call
+      const fcmKey = `fcm_sent:${targetUserId}:${callId}`;
+      const alreadySent = await redisService.client.get(fcmKey);
+      
+      if (alreadySent) {
+        console.log(`⚠️  FCM already sent for call ${callId} to user ${targetUserId}, skipping`);
+        return;
+      }
+
       const fcmService = require('../services/fcmService');
       
       // Get caller information
@@ -1192,6 +1206,10 @@ class SocketHandlers {
       };
 
       await fcmService.sendNotification(targetUserId, fcmPayload);
+      
+      // ✅ Mark FCM as sent for this call (5 minute TTL)
+      await redisService.client.setex(fcmKey, 300, 'sent');
+      
       console.log(`✅ FCM with ${signal.type} signal sent to offline user ${targetUserId}`);
 
     } catch (error) {

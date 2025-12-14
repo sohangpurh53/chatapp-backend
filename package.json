@@ -15,6 +15,8 @@
     "test-socket": "node test-socket.js",
     "test-notifications": "node test-notifications.js",
     "test-offline-calling": "node scripts/test-offline-calling.js",
+    "test-fcm-notifications": "node scripts/test-fcm-notifications.js",
+    "verify-fixes": "node scripts/verify-offline-calling-fix.js",
     "cleanup-signals": "node scripts/cleanup-expired-signals.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

@@ -138,20 +138,37 @@ class FCMService {
         data: dataPayload,
         android: {
           // ✅ Use high priority for call notifications
-          priority: notification.type === 'incoming_call' ? 'high' : 'normal',
+          priority: (notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') ? 'high' : 'normal',
           notification: {
             sound: prefs.soundEnabled !== false ? 'default' : undefined,
             channelId: this.getChannelId(notification.type),
             // ✅ Only use valid FCM notification properties
             defaultVibrateTimings: prefs.vibrationEnabled !== false,
             // ✅ For calls, use high visibility and importance
-            ...(notification.type === 'incoming_call' && {
+            ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
               visibility: 'public', // Show on lock screen
-              priority: 'high'
+              priority: 'high',
+              // ✅ CRITICAL: Add action buttons for incoming calls
+              actions: [
+                {
+                  title: 'Decline',
+                  pressAction: {
+                    id: 'decline',
+                    launchActivity: 'default'
+                  }
+                },
+                {
+                  title: 'Answer',
+                  pressAction: {
+                    id: 'answer',
+                    launchActivity: 'default'
+                  }
+                }
+              ]
             })
           },
           // ✅ Collapse key for call notifications to replace previous ones
-          ...(notification.type === 'incoming_call' && {
+          ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
             collapseKey: 'incoming_call'
           })
         },
@@ -161,7 +178,7 @@ class FCMService {
               sound: prefs.soundEnabled !== false ? 'default' : undefined,
               badge: 1,
               // ✅ Critical alert for iOS calls
-              ...(notification.type === 'incoming_call' && {
+              ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
                 'content-available': 1,
                 alert: {
                   title: notification.title,
@@ -173,7 +190,7 @@ class FCMService {
           },
           headers: {
             // ✅ High priority for iOS
-            'apns-priority': notification.type === 'incoming_call' ? '10' : '5',
+            'apns-priority': (notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') ? '10' : '5',
             'apns-push-type': 'alert'
           }
         }
@@ -242,6 +259,7 @@ class FCMService {
   shouldSendNotification(type, preferences) {
     switch (type) {
       case 'incoming_call':
+      case 'incoming_call_with_signal':
       case 'missed_call':
       case 'call_ended':
         return preferences.calls !== false;
@@ -258,6 +276,7 @@ class FCMService {
   getChannelId(type) {
     switch (type) {
       case 'incoming_call':
+      case 'incoming_call_with_signal':
       case 'missed_call':
       case 'call_ended':
         return 'calls';
