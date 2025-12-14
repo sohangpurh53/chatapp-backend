@@ -388,7 +388,7 @@ class SocketHandlers {
               }
             });
           } catch (fcmError) {
-            console.error(`❌ FCM failed for user ${participant.userId}:`, fcmError.message);
+            console.error(`❌ FCM failed for user ${participant.userId}:`,"fcmfullerror:",fcmError, fcmError.message);
           }
         }
       }
