@@ -150,25 +150,8 @@ class FCMService {
               priority: 'high'
             })
           },
-          // ✅ CRITICAL: Move actions to android level (not inside notification)
-          ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
-            actions: [
-              {
-                title: 'Decline',
-                pressAction: {
-                  id: 'decline',
-                  launchActivity: 'default'
-                }
-              },
-              {
-                title: 'Answer',
-                pressAction: {
-                  id: 'answer',
-                  launchActivity: 'default'
-                }
-              }
-            ]
-          }),
+          // ✅ REMOVED: Actions are handled client-side, not in FCM payload
+          // FCM doesn't support actions in the payload - they're configured in the client app
           // ✅ Collapse key for call notifications to replace previous ones
           ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
             collapseKey: 'incoming_call'
