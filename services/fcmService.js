@@ -128,14 +128,28 @@ class FCMService {
         });
       }
 
-      // Prepare FCM message - using only valid FCM properties
+      // ✅ CRITICAL FIX: Use data-only payload for call notifications
+      // This prevents default Firebase notifications and allows custom notifee notifications
+      const isCallNotification = notification.type === 'incoming_call' || 
+                                 notification.type === 'incoming_call_with_signal';
+
       const message = {
         token: user.fcmToken,
-        notification: {
-          title: notification.title,
-          body: notification.body
+        // ✅ Only include notification for non-call types
+        ...((!isCallNotification) && {
+          notification: {
+            title: notification.title,
+            body: notification.body
+          }
+        }),
+        data: {
+          ...dataPayload,
+          // ✅ For call notifications, move title/body to data
+          ...(isCallNotification && {
+            notificationTitle: notification.title,
+            notificationBody: notification.body
+          })
         },
-        data: dataPayload,
         android: {
           // ✅ Use high priority for call notifications
           priority: (notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') ? 'high' : 'normal',
