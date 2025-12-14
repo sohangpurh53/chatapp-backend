@@ -377,14 +377,14 @@ class SocketHandlers {
           console.log(`📱 Sending FCM to offline user ${participant.userId}`);
           try {
             await fcmService.sendNotification(participant.userId, {
-              title: message.sender.username,
+              title: completeMessage.sender.username,
               body: message.isEncrypted ? '🔒 Encrypted message' : message.content,
               data: {
                 type: 'new_message',
-                messageId: message.id,
-                chatId: message.chatId,
-                senderId: message.senderId,
-                // senderName: completeMessage.sender.username
+                messageId: completeMessage.message.id,
+                chatId: completeMessage.chatId,
+                senderId: completeMessage.sender.id,
+                senderName: completeMessage.sender.username
               }
             });
           } catch (fcmError) {
