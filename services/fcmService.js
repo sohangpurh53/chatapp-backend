@@ -147,26 +147,28 @@ class FCMService {
             // ✅ For calls, use high visibility and importance
             ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
               visibility: 'public', // Show on lock screen
-              priority: 'high',
-              // ✅ CRITICAL: Add action buttons for incoming calls
-              actions: [
-                {
-                  title: 'Decline',
-                  pressAction: {
-                    id: 'decline',
-                    launchActivity: 'default'
-                  }
-                },
-                {
-                  title: 'Answer',
-                  pressAction: {
-                    id: 'answer',
-                    launchActivity: 'default'
-                  }
-                }
-              ]
+              priority: 'high'
             })
           },
+          // ✅ CRITICAL: Move actions to android level (not inside notification)
+          ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
+            actions: [
+              {
+                title: 'Decline',
+                pressAction: {
+                  id: 'decline',
+                  launchActivity: 'default'
+                }
+              },
+              {
+                title: 'Answer',
+                pressAction: {
+                  id: 'answer',
+                  launchActivity: 'default'
+                }
+              }
+            ]
+          }),
           // ✅ Collapse key for call notifications to replace previous ones
           ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
             collapseKey: 'incoming_call'
