@@ -1240,10 +1240,10 @@ class SocketHandlers {
       // This prevents Firebase from showing default notification
       // Our custom notifee notification will be shown instead
       const fcmPayload = {
-        type: 'incoming_call_with_signal',
-        priority: 'high',
+        // ✅ FIXED: Move type and priority to data object as strings
         data: {
           type: 'incoming_call_with_signal',
+          priority: 'high',
           callId: String(callId),
           callerId: String(fromUserId),
           receiverId: String(targetUserId),

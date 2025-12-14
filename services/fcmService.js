@@ -104,15 +104,15 @@ class FCMService {
         timestamp: new Date().toISOString()
       };
 
-      // Convert notification.data to strings
+      // Convert notification.data to strings - FCM requires all data values to be strings
       if (notification.data) {
         Object.keys(notification.data).forEach(key => {
           const value = notification.data[key];
           if (value !== null && value !== undefined) {
-            // ✅ Handle large signal data with compression check
-            if (key === 'signalData' && typeof value === 'string') {
-              // Check payload size limit (FCM has 4KB limit)
-              if (value.length > 3000) {
+            // ✅ CRITICAL: Ensure ALL values are strings for FCM
+            if (typeof value === 'string') {
+              // Handle large signal data with compression check
+              if (key === 'signalData' && value.length > 3000) {
                 console.warn(`⚠️  Signal data too large (${value.length} chars), truncating for FCM`);
                 dataPayload[key] = JSON.stringify({ 
                   type: 'truncated', 
@@ -122,7 +122,8 @@ class FCMService {
                 dataPayload[key] = value;
               }
             } else {
-              dataPayload[key] = typeof value === 'string' ? value : JSON.stringify(value);
+              // ✅ Convert all non-string values to strings
+              dataPayload[key] = String(value);
             }
           }
         });
@@ -153,19 +154,15 @@ class FCMService {
         android: {
           // ✅ Use high priority for call notifications
           priority: (notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') ? 'high' : 'normal',
-          notification: {
-            sound: prefs.soundEnabled !== false ? 'default' : undefined,
-            channelId: this.getChannelId(notification.type),
-            // ✅ Only use valid FCM notification properties
-            defaultVibrateTimings: prefs.vibrationEnabled !== false,
-            // ✅ For calls, use high visibility and importance
-            ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
-              visibility: 'public', // Show on lock screen
-              priority: 'high'
-            })
-          },
-          // ✅ REMOVED: Actions are handled client-side, not in FCM payload
-          // FCM doesn't support actions in the payload - they're configured in the client app
+          // ✅ FIXED: Only include notification config for non-call notifications
+          ...(!isCallNotification && {
+            notification: {
+              sound: prefs.soundEnabled !== false ? 'default' : undefined,
+              channelId: this.getChannelId(notification.type),
+              // ✅ Only use valid FCM notification properties
+              defaultVibrateTimings: prefs.vibrationEnabled !== false
+            }
+          }),
           // ✅ Collapse key for call notifications to replace previous ones
           ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
             collapseKey: 'incoming_call'
@@ -194,6 +191,26 @@ class FCMService {
           }
         }
       };
+
+      // ✅ DEBUG: Log the message structure for call notifications
+      if (isCallNotification) {
+        console.log('📱 FCM Call Notification Payload:');
+        console.log('- Token:', user.fcmToken ? 'Present' : 'Missing');
+        console.log('- Data keys:', Object.keys(message.data || {}));
+        console.log('- Data types:', Object.keys(message.data || {}).map(key => 
+          `${key}: ${typeof message.data[key]}`
+        ));
+        
+        // Check for non-string values
+        const nonStringValues = Object.keys(message.data || {}).filter(key => 
+          typeof message.data[key] !== 'string'
+        );
+        if (nonStringValues.length > 0) {
+          console.error('❌ Non-string values found in FCM data:', nonStringValues.map(key => 
+            `${key}: ${typeof message.data[key]} (${message.data[key]})`
+          ));
+        }
+      }
 
       // Send via FCM
       const response = await messaging.send(message);
