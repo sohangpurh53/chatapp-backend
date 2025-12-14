@@ -297,7 +297,8 @@ class SocketHandlers {
           {
             model: User,
             as: 'sender',
-            attributes: ['id', 'username', 'avatar', 'publicKey']
+            attributes: ['id', 'username', 'avatar', 'publicKey'],
+            required: true // ✅ Ensure sender is always included
           },
           {
             model: User,
@@ -329,6 +330,31 @@ class SocketHandlers {
           ] 
         }
       });
+
+      // ✅ Add validation for completeMessage
+      if (!completeMessage) {
+        console.error(`❌ Failed to fetch complete message data for message ${message.id}`);
+        socket.emit('error', { message: 'Failed to fetch message data' });
+        return;
+      }
+
+      // ✅ Debug complete message structure
+      console.log('📋 Complete message structure:', {
+        id: completeMessage.id,
+        senderId: completeMessage.senderId,
+        hasSender: !!completeMessage.sender,
+        senderData: completeMessage.sender ? {
+          id: completeMessage.sender.id,
+          username: completeMessage.sender.username
+        } : null
+      });
+
+      if (!completeMessage.sender) {
+        console.error(`❌ Missing sender data for message ${message.id}, senderId: ${socket.userId}`);
+        console.error('❌ Complete message data:', JSON.stringify(completeMessage, null, 2));
+        socket.emit('error', { message: 'Failed to fetch sender data' });
+        return;
+      }
 
       // Update chat's last activity
       await Chat.update(
@@ -376,15 +402,39 @@ class SocketHandlers {
         if (!isOnline) {
           console.log(`📱 Sending FCM to offline user ${participant.userId}`);
           try {
+            // ✅ Add null checks for sender data with fallback
+            let senderName = 'Unknown User';
+            let senderId = socket.userId; // Fallback to socket userId
+
+            if (completeMessage && completeMessage.sender) {
+              senderName = completeMessage.sender.username || 'Unknown User';
+              senderId = completeMessage.sender.id;
+            } else {
+              console.warn(`⚠️ Missing sender data for message ${message.id}, using fallback data`);
+              // Try to get sender info from socket or database
+              try {
+                const User = require('../models/User');
+                const senderUser = await User.findByPk(socket.userId, {
+                  attributes: ['id', 'username']
+                });
+                if (senderUser) {
+                  senderName = senderUser.username || 'Unknown User';
+                  senderId = senderUser.id;
+                }
+              } catch (userError) {
+                console.error('❌ Failed to fetch sender user data:', userError.message);
+              }
+            }
+
             await fcmService.sendNotification(participant.userId, {
-              title: completeMessage.sender.username,
-              body: message.isEncrypted ? '🔒 Encrypted message' : message.content,
+              title: senderName,
+              body: message.isEncrypted ? '🔒 Encrypted message' : (message.content || 'New message'),
               data: {
                 type: 'new_message',
-                messageId: completeMessage.message.id,
-                chatId: completeMessage.chatId,
-                senderId: completeMessage.sender.id,
-                senderName: completeMessage.sender.username
+                messageId: completeMessage ? completeMessage.id : message.id,
+                chatId: completeMessage ? completeMessage.chatId : chatId,
+                senderId: senderId,
+                senderName: senderName
               }
             });
           } catch (fcmError) {
