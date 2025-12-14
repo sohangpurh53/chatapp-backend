@@ -1182,10 +1182,10 @@ class SocketHandlers {
         return;
       }
 
-      // ✅ Prepare enhanced FCM payload with signal data
+      // ✅ Prepare DATA-ONLY FCM payload (no default notification)
+      // This prevents Firebase from showing default notification
+      // Our custom notifee notification will be shown instead
       const fcmPayload = {
-        title: `Incoming ${callData.callType} call`,
-        body: `${caller.username} is calling you`,
         type: 'incoming_call_with_signal',
         priority: 'high',
         data: {
@@ -1201,7 +1201,10 @@ class SocketHandlers {
           signalType: String(signal.type),
           signalData: JSON.stringify(signal),
           timestamp: String(Date.now()),
-          action: 'incoming_call_with_signal'
+          action: 'incoming_call_with_signal',
+          // ✅ Include title/body in data for our custom notification
+          notificationTitle: `Incoming ${callData.callType} call`,
+          notificationBody: `${caller.username} is calling you`
         }
       };
 
