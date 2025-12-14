@@ -355,7 +355,11 @@ class SocketHandlers {
 
       // ✅ SIMPLIFIED: Direct socket delivery only
       this.io.to(`chat_${chatId}`).emit('new_message', completeMessage);
-      console.log(`📡 Message ${completeMessage} emitted directly to chat ${chatId}`);
+      console.log("📡 Message emitted directly to chat", {
+      chatId,
+      message: completeMessage.toJSON(),
+    });
+
 
       // Immediate acknowledgment to sender
       socket.emit('message_sent', {
