@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App Logs Viewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-7xl">
+        <!-- Header -->
+        <div class="bg-white rounded-lg shadow-sm p-6 mb-6">
+            <h1 class="text-3xl font-bold text-gray-800 mb-4">📊 App Logs Viewer</h1>
+            
+            <!-- Filters -->
+            <div class="flex flex-wrap gap-4 items-center">
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" id="filterLog" class="w-4 h-4 text-blue-600 rounded" checked>
+                    <label for="filterLog" class="text-sm font-medium text-gray-700">Log</label>
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" id="filterWarn" class="w-4 h-4 text-yellow-600 rounded" checked>
+                    <label for="filterWarn" class="text-sm font-medium text-gray-700">Warn</label>
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" id="filterError" class="w-4 h-4 text-red-600 rounded" checked>
+                    <label for="filterError" class="text-sm font-medium text-gray-700">Error</label>
+                </div>
+                <button id="refreshBtn" class="ml-auto px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                    🔄 Refresh
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div class="bg-white rounded-lg shadow-sm p-4">
+                <div class="text-sm text-gray-500">Total Logs</div>
+                <div class="text-2xl font-bold text-gray-800" id="totalCount">0</div>
+            </div>
+            <div class="bg-white rounded-lg shadow-sm p-4">
+                <div class="text-sm text-gray-500">Platform</div>
+                <div class="text-2xl font-bold text-gray-800" id="platformInfo">-</div>
+            </div>
+            <div class="bg-white rounded-lg shadow-sm p-4">
+                <div class="text-sm text-gray-500">Last Updated</div>
+                <div class="text-2xl font-bold text-gray-800" id="lastUpdated">-</div>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div id="loading" class="text-center py-12">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+            <p class="mt-4 text-gray-600">Loading logs...</p>
+        </div>
+
+        <!-- Error State -->
+        <div id="error" class="hidden bg-red-50 border border-red-200 rounded-lg p-6 mb-6">
+            <h3 class="text-red-800 font-semibold mb-2">❌ Error Loading Logs</h3>
+            <p class="text-red-600" id="errorMessage"></p>
+        </div>
+
+        <!-- Logs Container -->
+        <div id="logsContainer" class="space-y-3 hidden"></div>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="hidden text-center py-12 bg-white rounded-lg shadow-sm">
+            <p class="text-gray-500 text-lg">No logs found matching the selected filters</p>
+        </div>
+    </div>
+
+    <script>
+        
+        function getBaseURL(fullUrl) {
+            const urlObj = new URL(fullUrl);
+            return `${urlObj.protocol}//${urlObj.host}`;
+        }
+        const url = window.location.href
+        const BASE_URL = getBaseURL(url) ||  'https://socket-chatapp.wesolves.site';
+
+        const API_ENDPOINT = `${BASE_URL}/api/app-logs`;
+        
+        let allLogs = [];
+
+        // Level badge colors
+        const levelColors = {
+            log: 'bg-blue-100 text-blue-800',
+            warn: 'bg-yellow-100 text-yellow-800',
+            error: 'bg-red-100 text-red-800',
+            info: 'bg-green-100 text-green-800'
+        };
+
+        // Level icons
+        const levelIcons = {
+            log: '📝',
+            warn: '⚠️',
+            error: '❌',
+            info: 'ℹ️'
+        };
+
+        async function fetchLogs() {
+            const filters = [];
+            if (document.getElementById('filterLog').checked) filters.push('console.log=true');
+            if (document.getElementById('filterWarn').checked) filters.push('console.warn=true');
+            if (document.getElementById('filterError').checked) filters.push('console.error=true');
+            
+            const queryString = filters.length > 0 ? '?' + filters.join('&') : '';
+            const url = `${API_ENDPOINT}${queryString}`;
+
+            try {
+                showLoading();
+                const response = await fetch(url);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                allLogs = await response.json();
+                displayLogs(allLogs);
+                updateStats(allLogs);
+            } catch (err) {
+                showError(err.message);
+            }
+        }
+
+        function showLoading() {
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('logsContainer').classList.add('hidden');
+            document.getElementById('error').classList.add('hidden');
+            document.getElementById('emptyState').classList.add('hidden');
+        }
+
+        function showError(message) {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('error').classList.remove('hidden');
+            document.getElementById('errorMessage').textContent = message;
+        }
+
+        function displayLogs(logs) {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('error').classList.add('hidden');
+            
+            const container = document.getElementById('logsContainer');
+            
+            if (logs.length === 0) {
+                container.classList.add('hidden');
+                document.getElementById('emptyState').classList.remove('hidden');
+                return;
+            }
+
+            container.classList.remove('hidden');
+            document.getElementById('emptyState').classList.add('hidden');
+            
+            container.innerHTML = logs.map(log => createLogCard(log)).join('');
+        }
+
+        function createLogCard(log) {
+            const date = new Date(log.created_at);
+            const formattedDate = date.toLocaleString();
+            const levelColor = levelColors[log.level] || 'bg-gray-100 text-gray-800';
+            const levelIcon = levelIcons[log.level] || '📄';
+            
+            return `
+                <div class="bg-white rounded-lg shadow-sm p-4 hover:shadow-md transition">
+                    <div class="flex items-start justify-between mb-3">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xl">${levelIcon}</span>
+                            <span class="px-3 py-1 rounded-full text-xs font-semibold ${levelColor}">
+                                ${log.level.toUpperCase()}
+                            </span>
+                            ${log.platform ? `<span class="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700">${log.platform}</span>` : ''}
+                        </div>
+                        <span class="text-sm text-gray-500">${formattedDate}</span>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <p class="text-gray-800 font-medium">${log.message || '-'}</p>
+                    </div>
+                    
+                    ${log.payload ? `
+                        <details class="mt-2">
+                            <summary class="cursor-pointer text-sm text-blue-600 hover:text-blue-800 font-medium">View Payload</summary>
+                            <pre class="mt-2 p-3 bg-gray-50 rounded text-xs overflow-x-auto">${JSON.stringify(log.payload, null, 2)}</pre>
+                        </details>
+                    ` : ''}
+                    
+                    <div class="flex gap-4 mt-3 text-xs text-gray-500">
+                        ${log.source ? `<span>Source: <span class="font-medium">${log.source}</span></span>` : ''}
+                        ${log.app_version ? `<span>Version: <span class="font-medium">${log.app_version}</span></span>` : ''}
+                        <span>ID: <span class="font-medium">${log.id}</span></span>
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateStats(logs) {
+            document.getElementById('totalCount').textContent = logs.length;
+            
+            const platforms = [...new Set(logs.map(l => l.platform).filter(Boolean))];
+            document.getElementById('platformInfo').textContent = platforms.join(', ') || 'N/A';
+            
+            const now = new Date();
+            document.getElementById('lastUpdated').textContent = now.toLocaleTimeString();
+        }
+
+        // Event listeners
+        document.getElementById('refreshBtn').addEventListener('click', fetchLogs);
+        document.getElementById('filterLog').addEventListener('change', fetchLogs);
+        document.getElementById('filterWarn').addEventListener('change', fetchLogs);
+        document.getElementById('filterError').addEventListener('change', fetchLogs);
+
+        // Initial load
+        fetchLogs();
+    </script>
+</body>
+</html>
