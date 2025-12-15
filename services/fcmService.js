@@ -187,7 +187,7 @@ class FCMService {
           headers: {
             // ✅ High priority for iOS
             'apns-priority': (notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') ? '10' : '5',
-            'apns-push-type': 'alert'
+            'apns-push-type': 'voip'
           }
         }
       };
