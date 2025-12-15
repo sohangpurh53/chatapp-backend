@@ -46,7 +46,7 @@ const AppLog = sequelize.define(
     },
   },
   {
-    tableName: "app_logs",
+    tableName: "Applogs",
     timestamps: false,
     indexes: [
       { fields: ["level"] },
