@@ -174,6 +174,42 @@
         <!-- Logs Container -->
         <div id="logsContainer" class="space-y-2 hidden"></div>
 
+        <!-- Pagination -->
+        <div id="pagination" class="hidden mt-6 flex items-center justify-between border-t pt-6 transition-colors duration-300" style="border-color: var(--border-color);">
+            <div class="flex items-center gap-2">
+                <label for="itemsPerPage" class="text-sm" style="color: var(--text-secondary);">Items per page:</label>
+                <select id="itemsPerPage" class="px-3 py-1 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors duration-300" style="background-color: var(--bg-tertiary); border-color: var(--border-color); color: var(--text-primary);">
+                    <option value="10">10</option>
+                    <option value="25" selected>25</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                </select>
+                <span class="text-sm ml-4" style="color: var(--text-tertiary);">
+                    Showing <span id="showingStart" class="font-semibold" style="color: var(--text-primary);">0</span> - 
+                    <span id="showingEnd" class="font-semibold" style="color: var(--text-primary);">0</span> of 
+                    <span id="showingTotal" class="font-semibold" style="color: var(--text-primary);">0</span>
+                </span>
+            </div>
+            
+            <div class="flex items-center gap-2">
+                <button id="firstPage" class="px-3 py-2 rounded-lg transition hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed" style="background-color: var(--bg-tertiary);">
+                    <i class="fas fa-angle-double-left"></i>
+                </button>
+                <button id="prevPage" class="px-3 py-2 rounded-lg transition hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed" style="background-color: var(--bg-tertiary);">
+                    <i class="fas fa-angle-left"></i>
+                </button>
+                
+                <div class="flex items-center gap-1" id="pageNumbers"></div>
+                
+                <button id="nextPage" class="px-3 py-2 rounded-lg transition hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed" style="background-color: var(--bg-tertiary);">
+                    <i class="fas fa-angle-right"></i>
+                </button>
+                <button id="lastPage" class="px-3 py-2 rounded-lg transition hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed" style="background-color: var(--bg-tertiary);">
+                    <i class="fas fa-angle-double-right"></i>
+                </button>
+            </div>
+        </div>
+
         <!-- Empty State -->
         <div id="emptyState" class="hidden text-center py-16">
             <i class="fas fa-inbox text-6xl mb-4" style="color: var(--text-tertiary);"></i>
@@ -193,6 +229,8 @@
         
         let allLogs = [];
         let filteredLogs = [];
+        let currentPage = 1;
+        let itemsPerPage = 25;
 
         document.getElementById('apiUrl').textContent = API_ENDPOINT;
 
@@ -285,6 +323,7 @@
                 return true;
             });
 
+            currentPage = 1; // Reset to first page when filters change
             displayLogs(filteredLogs);
         }
 
@@ -293,17 +332,81 @@
             document.getElementById('error').classList.add('hidden');
             
             const container = document.getElementById('logsContainer');
+            const paginationDiv = document.getElementById('pagination');
             
             if (logs.length === 0) {
                 container.classList.add('hidden');
+                paginationDiv.classList.add('hidden');
                 document.getElementById('emptyState').classList.remove('hidden');
                 return;
             }
 
             container.classList.remove('hidden');
+            paginationDiv.classList.remove('hidden');
             document.getElementById('emptyState').classList.add('hidden');
             
-            container.innerHTML = logs.map(log => createLogCard(log)).join('');
+            // Get current items per page value
+            const currentItemsPerPage = parseInt(document.getElementById('itemsPerPage').value) || itemsPerPage;
+            
+            // Calculate pagination
+            const totalPages = Math.ceil(logs.length / currentItemsPerPage);
+            
+            // Ensure current page is within bounds
+            if (currentPage > totalPages) {
+                currentPage = totalPages || 1;
+            }
+            
+            const startIndex = (currentPage - 1) * currentItemsPerPage;
+            const endIndex = Math.min(startIndex + currentItemsPerPage, logs.length);
+            const paginatedLogs = logs.slice(startIndex, endIndex);
+            
+            // Display logs
+            container.innerHTML = paginatedLogs.map(log => createLogCard(log)).join('');
+            
+            // Update pagination UI
+            updatePaginationUI(logs.length, totalPages, currentItemsPerPage);
+        }
+
+        function updatePaginationUI(totalItems, totalPages, currentItemsPerPage) {
+            const startIndex = (currentPage - 1) * currentItemsPerPage;
+            const endIndex = Math.min(startIndex + currentItemsPerPage, totalItems);
+            
+            document.getElementById('showingStart').textContent = totalItems > 0 ? startIndex + 1 : 0;
+            document.getElementById('showingEnd').textContent = endIndex;
+            document.getElementById('showingTotal').textContent = totalItems;
+            
+            // Update buttons state
+            document.getElementById('firstPage').disabled = currentPage === 1;
+            document.getElementById('prevPage').disabled = currentPage === 1;
+            document.getElementById('nextPage').disabled = currentPage === totalPages;
+            document.getElementById('lastPage').disabled = currentPage === totalPages;
+            
+            // Generate page numbers
+            const pageNumbersDiv = document.getElementById('pageNumbers');
+            pageNumbersDiv.innerHTML = '';
+            
+            const maxVisiblePages = 5;
+            let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+            let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+            
+            if (endPage - startPage < maxVisiblePages - 1) {
+                startPage = Math.max(1, endPage - maxVisiblePages + 1);
+            }
+            
+            for (let i = startPage; i <= endPage; i++) {
+                const pageBtn = document.createElement('button');
+                pageBtn.textContent = i;
+                pageBtn.className = `px-3 py-2 rounded-lg transition hover:opacity-80 text-sm ${i === currentPage ? 'bg-blue-600 text-white' : ''}`;
+                if (i !== currentPage) {
+                    pageBtn.style.backgroundColor = 'var(--bg-tertiary)';
+                }
+                pageBtn.addEventListener('click', () => {
+                    currentPage = i;
+                    displayLogs(filteredLogs);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                });
+                pageNumbersDiv.appendChild(pageBtn);
+            }
         }
 
         function createLogCard(log) {
@@ -388,6 +491,45 @@
         document.getElementById('filterWarn').addEventListener('change', fetchLogs);
         document.getElementById('filterError').addEventListener('change', fetchLogs);
         document.getElementById('searchInput').addEventListener('input', applyFilters);
+
+        // Pagination event listeners
+        document.getElementById('itemsPerPage').addEventListener('change', (e) => {
+            itemsPerPage = parseInt(e.target.value);
+            currentPage = 1;
+            displayLogs(filteredLogs);
+        });
+
+        document.getElementById('firstPage').addEventListener('click', () => {
+            currentPage = 1;
+            displayLogs(filteredLogs);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+
+        document.getElementById('prevPage').addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage--;
+                displayLogs(filteredLogs);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+        });
+
+        document.getElementById('nextPage').addEventListener('click', () => {
+            const currentItemsPerPage = parseInt(document.getElementById('itemsPerPage').value) || itemsPerPage;
+            const totalPages = Math.ceil(filteredLogs.length / currentItemsPerPage);
+            if (currentPage < totalPages) {
+                currentPage++;
+                displayLogs(filteredLogs);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+        });
+
+        document.getElementById('lastPage').addEventListener('click', () => {
+            const currentItemsPerPage = parseInt(document.getElementById('itemsPerPage').value) || itemsPerPage;
+            const totalPages = Math.ceil(filteredLogs.length / currentItemsPerPage);
+            currentPage = totalPages;
+            displayLogs(filteredLogs);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
 
         // Auto-refresh every 30 seconds
         setInterval(fetchLogs, 30000);
