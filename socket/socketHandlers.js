@@ -920,14 +920,15 @@ class SocketHandlers {
     // const receiverSocketId = this.connectedUsers.get(receiverId);
     const isReceiverOnline = !!receiverSocketId;
 
+    // ✅ FIX: Define callerData outside the if block so it's available for both online and offline cases
+    const callerData = {
+      id: caller.id,
+      username: caller.username,
+      avatar: caller.avatar || null
+    };
+
     if (isReceiverOnline && receiverSocketId) {
       console.log(`📡 Receiver ${receiverId} is ONLINE, sending via Socket.IO`);
-      
-      const callerData = {
-        id: caller.id,
-        username: caller.username,
-        avatar: caller.avatar || null
-      };
       
       // ✅ CRITICAL: Include receiverId for verification
       this.io.to(receiverSocketId).emit('incoming_call', {
@@ -944,9 +945,9 @@ class SocketHandlers {
       await new Promise(resolve => setTimeout(resolve, 100));
       
     } else {
-      console.log(`📱 Receiver ${receiverId} is OFFLINE - will send FCM when SDP offer arrives`);
-      // ✅ SIMPLIFIED: FCM with signal data will be sent by handleCallSignal when offer arrives
-      // This ensures the FCM notification contains the actual SDP offer data
+      console.log(`📱 Receiver ${receiverId} is OFFLINE - sending simplified FCM notification`);
+      // ✅ SIMPLIFIED: Send FCM immediately without waiting for signal data
+      await this.sendOfflineCallNotification(receiverId, callId, callerData, callType, chatId);
     }
 
     // ✅ NOW confirm to caller (after receiver was notified)
@@ -1207,6 +1208,39 @@ class SocketHandlers {
     } catch (error) {
       console.error('❌ Call signal error:', error);
       socket.emit('call_error', { message: 'Signal delivery failed' });
+    }
+  }
+
+  /**
+   * ✅ SIMPLIFIED: Send offline call notification without signal data
+   */
+  async sendOfflineCallNotification(receiverId, callId, caller, callType, chatId) {
+    try {
+      const fcmService = require('../services/fcmService');
+      
+      // Simple FCM payload - no signal data needed
+      const fcmPayload = {
+        data: {
+          type: 'incoming_call_offline',
+          callId: String(callId),
+          callerId: String(caller.id),
+          receiverId: String(receiverId),
+          callType: String(callType),
+          chatId: chatId ? String(chatId) : '',
+          callerName: String(caller.username),
+          callerAvatar: String(caller.avatar || ''),
+          timestamp: String(Date.now()),
+          notificationTitle: `Incoming ${callType} call`,
+          notificationBody: `${caller.username} is calling you`
+        }
+      };
+
+      await fcmService.sendNotification(receiverId, fcmPayload);
+      console.log(`✅ Simplified offline call notification sent to user ${receiverId}`);
+
+    } catch (error) {
+      console.error(`❌ Error sending offline call notification to user ${receiverId}:`, error);
+      throw error;
     }
   }
 

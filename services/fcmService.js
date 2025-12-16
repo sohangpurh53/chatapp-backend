@@ -134,7 +134,8 @@ class FCMService {
       // ✅ CRITICAL FIX: Use data-only payload for call notifications
       // This prevents default Firebase notifications and allows custom notifee notifications
       const isCallNotification = notification.type === 'incoming_call' || 
-                                 notification?.data?.type === 'incoming_call_with_signal';
+                                 notification?.data?.type === 'incoming_call_with_signal' ||
+                                 notification?.data?.type === 'incoming_call_offline';
 
       const message = {
         token: user.fcmToken,
@@ -155,7 +156,9 @@ class FCMService {
         },
         android: {
           // ✅ Use high priority for call notifications
-          priority: (notification.type === 'incoming_call' || notification?.data?.type === 'incoming_call_with_signal') ? 'high' : 'normal',
+          priority: (notification.type === 'incoming_call' || 
+                     notification?.data?.type === 'incoming_call_with_signal' ||
+                     notification?.data?.type === 'incoming_call_offline') ? 'high' : 'normal',
           // ✅ FIXED: Only include notification config for non-call notifications
           ...(!isCallNotification && {
             notification: {
@@ -166,7 +169,9 @@ class FCMService {
             }
           }),
           // ✅ Collapse key for call notifications to replace previous ones
-          ...((notification.type === 'incoming_call' || notification?.data?.type === 'incoming_call_with_signal') && {
+          ...((notification.type === 'incoming_call' || 
+               notification?.data?.type === 'incoming_call_with_signal' ||
+               notification?.data?.type === 'incoming_call_offline') && {
             collapseKey: 'incoming_call'
           })
         },
@@ -176,7 +181,9 @@ class FCMService {
               sound: prefs.soundEnabled !== false ? 'default' : undefined,
               badge: 1,
               // ✅ Critical alert for iOS calls
-              ...((notification.type === 'incoming_call' || notification?.data?.type === 'incoming_call_with_signal') && {
+              ...((notification.type === 'incoming_call' || 
+                   notification?.data?.type === 'incoming_call_with_signal' ||
+                   notification?.data?.type === 'incoming_call_offline') && {
                 'content-available': 1,
                 alert: {
                   title: notification.title,
@@ -188,7 +195,9 @@ class FCMService {
           },
           headers: {
             // ✅ High priority for iOS
-            'apns-priority': (notification.type === 'incoming_call' || notification?.data?.type === 'incoming_call_with_signal') ? '10' : '5',
+            'apns-priority': (notification.type === 'incoming_call' || 
+                             notification?.data?.type === 'incoming_call_with_signal' ||
+                             notification?.data?.type === 'incoming_call_offline') ? '10' : '5',
             'apns-push-type': 'voip'
           }
         }
@@ -278,6 +287,7 @@ class FCMService {
     switch (type) {
       case 'incoming_call':
       case 'incoming_call_with_signal':
+      case 'incoming_call_offline':
       case 'missed_call':
       case 'call_ended':
         return preferences.calls !== false;
@@ -295,6 +305,7 @@ class FCMService {
     switch (type) {
       case 'incoming_call':
       case 'incoming_call_with_signal':
+      case 'incoming_call_offline':
       case 'missed_call':
       case 'call_ended':
         return 'calls';
