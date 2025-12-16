@@ -61,6 +61,8 @@ class FCMService {
         return { success: false, reason: 'firebase_not_configured' };
       }
 
+      console.log("notification payload investigate.......", notification)
+
       // Get user's FCM token
       const user = await User.findByPk(userId, {
         attributes: ['fcmToken', 'notificationPreferences']
