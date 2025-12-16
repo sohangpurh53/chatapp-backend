@@ -176,7 +176,7 @@ class FCMService {
               sound: prefs.soundEnabled !== false ? 'default' : undefined,
               badge: 1,
               // ✅ Critical alert for iOS calls
-              ...((notification.type === 'incoming_call' || notification?data?.type === 'incoming_call_with_signal') && {
+              ...((notification.type === 'incoming_call' || notification?.data?.type === 'incoming_call_with_signal') && {
                 'content-available': 1,
                 alert: {
                   title: notification.title,
