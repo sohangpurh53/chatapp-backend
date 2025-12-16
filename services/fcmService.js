@@ -61,7 +61,7 @@ class FCMService {
         return { success: false, reason: 'firebase_not_configured' };
       }
 
-      console.log("notification payload investigate.......", notification)
+      // console.log("notification payload investigate.......", notification)
 
       // Get user's FCM token
       const user = await User.findByPk(userId, {
@@ -134,7 +134,7 @@ class FCMService {
       // ✅ CRITICAL FIX: Use data-only payload for call notifications
       // This prevents default Firebase notifications and allows custom notifee notifications
       const isCallNotification = notification.type === 'incoming_call' || 
-                                 notification.type === 'incoming_call_with_signal';
+                                 notification?.data?.type === 'incoming_call_with_signal';
 
       const message = {
         token: user.fcmToken,
@@ -155,18 +155,18 @@ class FCMService {
         },
         android: {
           // ✅ Use high priority for call notifications
-          priority: (notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') ? 'high' : 'normal',
+          priority: (notification.type === 'incoming_call' || notification?.data?.type === 'incoming_call_with_signal') ? 'high' : 'normal',
           // ✅ FIXED: Only include notification config for non-call notifications
           ...(!isCallNotification && {
             notification: {
               sound: prefs.soundEnabled !== false ? 'default' : undefined,
-              channelId: this.getChannelId(notification.type),
+              channelId: this.getChannelId(notification?.data?.type),
               // ✅ Only use valid FCM notification properties
               defaultVibrateTimings: prefs.vibrationEnabled !== false
             }
           }),
           // ✅ Collapse key for call notifications to replace previous ones
-          ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
+          ...((notification.type === 'incoming_call' || notification?.data?.type === 'incoming_call_with_signal') && {
             collapseKey: 'incoming_call'
           })
         },
@@ -176,7 +176,7 @@ class FCMService {
               sound: prefs.soundEnabled !== false ? 'default' : undefined,
               badge: 1,
               // ✅ Critical alert for iOS calls
-              ...((notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') && {
+              ...((notification.type === 'incoming_call' || notification?data?.type === 'incoming_call_with_signal') && {
                 'content-available': 1,
                 alert: {
                   title: notification.title,
@@ -188,7 +188,7 @@ class FCMService {
           },
           headers: {
             // ✅ High priority for iOS
-            'apns-priority': (notification.type === 'incoming_call' || notification.type === 'incoming_call_with_signal') ? '10' : '5',
+            'apns-priority': (notification.type === 'incoming_call' || notification?.data?.type === 'incoming_call_with_signal') ? '10' : '5',
             'apns-push-type': 'voip'
           }
         }
