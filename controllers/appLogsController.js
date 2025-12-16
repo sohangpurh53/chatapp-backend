@@ -48,7 +48,7 @@ exports.getLogs = async (req, res) => {
     const logs = await AppLog.findAll({
       where,
       order: [["created_at", "DESC"]],
-      limit: 200,
+      // limit: 200,
     });
 
     return res.json(logs);
