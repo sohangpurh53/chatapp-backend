@@ -149,8 +149,8 @@ class FCMService {
           ...dataPayload,
           // ✅ For call notifications, move title/body to data
           ...(isCallNotification && {
-            notificationTitle: notification.title,
-            notificationBody: notification.body
+            notificationTitle: notification?.data?.notificationTitle,
+            notificationBody: notification?.data?.notificationBody
           })
         },
         android: {
