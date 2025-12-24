@@ -11,7 +11,7 @@
             from { opacity: 0; transform: translateY(-10px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        .log-entry { animation: slideIn 0.2s ease-out; }
+        .log-entry { animation: slideIn 0.2s ease-out; position: relative; }
         .code-font { font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; }
         
         /* Light theme variables */
@@ -23,6 +23,7 @@
             --text-primary: #0f172a;
             --text-secondary: #475569;
             --text-tertiary: #94a3b8;
+            --selection-bg: rgba(59, 130, 246, 0.1);
         }
         
         /* Dark theme variables */
@@ -34,11 +35,40 @@
             --text-primary: #f1f5f9;
             --text-secondary: #cbd5e1;
             --text-tertiary: #64748b;
+            --selection-bg: rgba(59, 130, 246, 0.2);
+        }
+
+        .log-selected {
+            background-color: var(--selection-bg) !important;
+            border-color: #3b82f6 !important;
+        }
+
+        #selectionToolbar {
+            transform: translateY(100px);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        #selectionToolbar.visible {
+            transform: translateY(0);
+        }
+
+        .custom-checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border-color);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        .log-selected .custom-checkbox {
+            background-color: #3b82f6;
+            border-color: #3b82f6;
         }
     </style>
 </head>
-<body class="dark-theme transition-colors duration-300 min-h-screen" style="background-color: var(--bg-primary); color: var(--text-primary);">
-    <!-- Header with dark theme -->
+<body class="dark-theme transition-colors duration-300 min-h-screen pb-24" style="background-color: var(--bg-primary); color: var(--text-primary);">
+    <!-- Header -->
     <div class="border-b sticky top-0 z-10 shadow-lg transition-colors duration-300" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
         <div class="container mx-auto px-6 py-4">
             <div class="flex items-center justify-between mb-4">
@@ -53,13 +83,13 @@
                 </div>
                 
                 <div class="flex gap-2">
-                    <button id="themeToggle" class="px-4 py-2 rounded-lg transition flex items-center gap-2 text-sm hover:opacity-80" style="background-color: var(--bg-tertiary);">
+                    <button id="themeToggle" title="Toggle Theme" class="px-4 py-2 rounded-lg transition flex items-center gap-2 text-sm hover:opacity-80" style="background-color: var(--bg-tertiary);">
                         <i class="fas fa-moon" id="themeIcon"></i>
                     </button>
-                    <button id="clearBtn" class="px-4 py-2 rounded-lg transition flex items-center gap-2 text-sm hover:opacity-80" style="background-color: var(--bg-tertiary);">
+                    <button id="clearBtn" title="Clear View" class="px-4 py-2 rounded-lg transition flex items-center gap-2 text-sm hover:opacity-80" style="background-color: var(--bg-tertiary);">
                         <i class="fas fa-trash"></i> Clear
                     </button>
-                    <button id="refreshBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition flex items-center gap-2 text-sm font-medium text-white">
+                    <button id="refreshBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition flex items-center gap-2 text-sm font-medium text-white shadow-lg shadow-blue-500/20">
                         <i class="fas fa-sync-alt" id="refreshIcon"></i> Refresh
                     </button>
                 </div>
@@ -88,8 +118,11 @@
 
                 <div class="h-6 w-px" style="background-color: var(--border-color);"></div>
 
-                <input type="text" id="searchInput" placeholder="Search logs..." 
-                    class="px-3 py-1 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors duration-300" style="background-color: var(--bg-tertiary); border-color: var(--border-color); color: var(--text-primary);">
+                <div class="relative flex-1 max-w-md">
+                    <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-xs" style="color: var(--text-tertiary);"></i>
+                    <input type="text" id="searchInput" placeholder="Search message or payload..." 
+                        class="w-full pl-9 pr-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-300" style="background-color: var(--bg-tertiary); border-color: var(--border-color); color: var(--text-primary);">
+                </div>
 
                 <div class="ml-auto flex items-center gap-4 text-sm">
                     <div class="flex items-center gap-2">
@@ -145,7 +178,7 @@
                     </div>
                     <div>
                         <div class="text-xs" style="color: var(--text-tertiary);">Platform</div>
-                        <div class="text-lg font-bold" id="platformInfo" style="color: var(--text-primary);">-</div>
+                        <div class="text-sm font-bold truncate max-w-[120px]" id="platformInfo" style="color: var(--text-primary);">-</div>
                     </div>
                 </div>
             </div>
@@ -158,7 +191,7 @@
         </div>
 
         <!-- Error State -->
-        <div id="error" class="hidden bg-red-900/20 border border-red-800 rounded-lg p-6 mb-6 transition-colors duration-300">
+        <div id="error" class="hidden bg-red-900/20 border border-red-800 rounded-lg p-6 mb-6">
             <div class="flex items-start gap-3">
                 <i class="fas fa-exclamation-circle text-red-400 text-2xl"></i>
                 <div>
@@ -171,20 +204,32 @@
             </div>
         </div>
 
+        <!-- Selection Actions Header (Sticky under main header) -->
+        <div id="selectionHeader" class="hidden mb-4 p-3 rounded-lg border flex items-center justify-between transition-all" style="background-color: var(--bg-secondary); border-color: #3b82f6;">
+             <div class="flex items-center gap-3">
+                <button id="selectAllBtn" class="text-sm font-medium text-blue-400 hover:underline">Select All on Page</button>
+                <span class="text-sm" style="color: var(--text-tertiary);">|</span>
+                <button id="deselectAllBtn" class="text-sm font-medium text-blue-400 hover:underline">Deselect All</button>
+             </div>
+             <span class="text-sm font-bold text-blue-500"><span id="headerSelectedCount">0</span> items selected</span>
+        </div>
+
         <!-- Logs Container -->
-        <div id="logsContainer" class="space-y-2 hidden"></div>
+        <div id="logsContainer" class="space-y-3 hidden"></div>
 
         <!-- Pagination -->
-        <div id="pagination" class="hidden mt-6 flex items-center justify-between border-t pt-6 transition-colors duration-300" style="border-color: var(--border-color);">
-            <div class="flex items-center gap-2">
-                <label for="itemsPerPage" class="text-sm" style="color: var(--text-secondary);">Items per page:</label>
-                <select id="itemsPerPage" class="px-3 py-1 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors duration-300" style="background-color: var(--bg-tertiary); border-color: var(--border-color); color: var(--text-primary);">
-                    <option value="10">10</option>
-                    <option value="25" selected>25</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                </select>
-                <span class="text-sm ml-4" style="color: var(--text-tertiary);">
+        <div id="pagination" class="hidden mt-8 flex flex-col md:flex-row items-center justify-between gap-4 border-t pt-6" style="border-color: var(--border-color);">
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2">
+                    <label for="itemsPerPage" class="text-sm" style="color: var(--text-secondary);">Show:</label>
+                    <select id="itemsPerPage" class="px-2 py-1 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" style="background-color: var(--bg-tertiary); border-color: var(--border-color); color: var(--text-primary);">
+                        <option value="10">10</option>
+                        <option value="25" selected>25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+                <span class="text-sm" style="color: var(--text-tertiary);">
                     Showing <span id="showingStart" class="font-semibold" style="color: var(--text-primary);">0</span> - 
                     <span id="showingEnd" class="font-semibold" style="color: var(--text-primary);">0</span> of 
                     <span id="showingTotal" class="font-semibold" style="color: var(--text-primary);">0</span>
@@ -192,19 +237,19 @@
             </div>
             
             <div class="flex items-center gap-2">
-                <button id="firstPage" class="px-3 py-2 rounded-lg transition hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed" style="background-color: var(--bg-tertiary);">
+                <button id="firstPage" class="p-2 rounded-lg transition hover:bg-blue-500/10 disabled:opacity-30" style="background-color: var(--bg-tertiary);">
                     <i class="fas fa-angle-double-left"></i>
                 </button>
-                <button id="prevPage" class="px-3 py-2 rounded-lg transition hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed" style="background-color: var(--bg-tertiary);">
+                <button id="prevPage" class="p-2 rounded-lg transition hover:bg-blue-500/10 disabled:opacity-30" style="background-color: var(--bg-tertiary);">
                     <i class="fas fa-angle-left"></i>
                 </button>
                 
-                <div class="flex items-center gap-1" id="pageNumbers"></div>
+                <div class="flex items-center gap-1 mx-2" id="pageNumbers"></div>
                 
-                <button id="nextPage" class="px-3 py-2 rounded-lg transition hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed" style="background-color: var(--bg-tertiary);">
+                <button id="nextPage" class="p-2 rounded-lg transition hover:bg-blue-500/10 disabled:opacity-30" style="background-color: var(--bg-tertiary);">
                     <i class="fas fa-angle-right"></i>
                 </button>
-                <button id="lastPage" class="px-3 py-2 rounded-lg transition hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed" style="background-color: var(--bg-tertiary);">
+                <button id="lastPage" class="p-2 rounded-lg transition hover:bg-blue-500/10 disabled:opacity-30" style="background-color: var(--bg-tertiary);">
                     <i class="fas fa-angle-double-right"></i>
                 </button>
             </div>
@@ -214,85 +259,86 @@
         <div id="emptyState" class="hidden text-center py-16">
             <i class="fas fa-inbox text-6xl mb-4" style="color: var(--text-tertiary);"></i>
             <p class="text-lg" style="color: var(--text-tertiary);">No logs found</p>
-            <p class="text-sm mt-2" style="color: var(--text-tertiary);">Try adjusting your filters</p>
+            <p class="text-sm mt-2" style="color: var(--text-tertiary);">Try adjusting your filters or search query</p>
+        </div>
+    </div>
+
+    <!-- Selection Floating Toolbar -->
+    <div id="selectionToolbar" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-6 px-6 py-4 bg-blue-600 text-white rounded-full shadow-2xl border border-blue-400">
+        <div class="flex flex-col border-r border-blue-400 pr-6">
+            <span class="text-xs font-bold uppercase tracking-wider opacity-80">Selected</span>
+            <span class="text-xl font-black leading-none" id="selectedCount">0</span>
+        </div>
+        <div class="flex items-center gap-3">
+            <button id="copySelectedBtn" class="flex items-center gap-2 px-4 py-2 bg-white text-blue-600 rounded-full font-bold text-sm hover:bg-blue-50 transition transform active:scale-95">
+                <i class="fas fa-copy"></i> Copy Selected
+            </button>
+            <button id="cancelSelectionBtn" class="p-2 text-white/80 hover:text-white transition">
+                <i class="fas fa-times text-lg"></i>
+            </button>
         </div>
     </div>
 
     <script>
-        function getBaseURL(fullUrl) {
-            const urlObj = new URL(fullUrl);
-            return `${urlObj.protocol}//${urlObj.host}`;
-        }
-        const url = window.location.href
-        const BASE_URL = 'https://socket-chatapp.wesolves.site' || getBaseURL(url);
+        const BASE_URL = 'https://socket-chatapp.wesolves.site';
         const API_ENDPOINT = `${BASE_URL}/api/app-logs`;
         
         let allLogs = [];
         let filteredLogs = [];
         let currentPage = 1;
         let itemsPerPage = 25;
+        let selectedLogIds = new Set();
 
         document.getElementById('apiUrl').textContent = API_ENDPOINT;
 
         const levelConfig = {
             log: { 
-                bg: 'bg-blue-900/40 border-blue-700/50 hover:border-blue-600', 
-                badge: 'bg-blue-500/30 text-blue-300',
+                bg: 'bg-blue-900/10 border-blue-500/20 hover:border-blue-500/40', 
+                badge: 'bg-blue-500/20 text-blue-400',
                 icon: 'fas fa-file-alt',
-                color: 'text-blue-400',
+                color: 'text-blue-500',
                 name: 'LOG'
             },
             warn: { 
-                bg: 'bg-yellow-900/40 border-yellow-700/50 hover:border-yellow-600', 
-                badge: 'bg-yellow-500/30 text-yellow-300',
+                bg: 'bg-yellow-900/10 border-yellow-500/20 hover:border-yellow-500/40', 
+                badge: 'bg-yellow-500/20 text-yellow-400',
                 icon: 'fas fa-exclamation-triangle',
-                color: 'text-yellow-400',
+                color: 'text-yellow-500',
                 name: 'WARN'
             },
             error: { 
-                bg: 'bg-red-900/40 border-red-700/50 hover:border-red-600', 
-                badge: 'bg-red-500/30 text-red-300',
+                bg: 'bg-red-900/10 border-red-500/20 hover:border-red-500/40', 
+                badge: 'bg-red-500/20 text-red-400',
                 icon: 'fas fa-times-circle',
-                color: 'text-red-400',
+                color: 'text-red-500',
                 name: 'ERROR'
             },
             info: { 
-                bg: 'bg-green-900/40 border-green-700/50 hover:border-green-600', 
-                badge: 'bg-green-500/30 text-green-300',
+                bg: 'bg-green-900/10 border-green-500/20 hover:border-green-500/40', 
+                badge: 'bg-green-500/20 text-green-400',
                 icon: 'fas fa-info-circle',
-                color: 'text-green-400',
+                color: 'text-green-500',
                 name: 'INFO'
             }
         };
 
         async function fetchLogs() {
             let queryString = '';
+            if (document.getElementById('filterLog').checked) queryString = '?console.log=true';
+            else if (document.getElementById('filterWarn').checked) queryString = '?console.warn=true';
+            else if (document.getElementById('filterError').checked) queryString = '?console.error=true';
             
-            if (document.getElementById('filterLog').checked) {
-                queryString = '?console.log=true';
-            } else if (document.getElementById('filterWarn').checked) {
-                queryString = '?console.warn=true';
-            } else if (document.getElementById('filterError').checked) {
-                queryString = '?console.error=true';
-            }
-            
-            const url = API_ENDPOINT + queryString;
-
             try {
                 showLoading();
                 const refreshIcon = document.getElementById('refreshIcon');
                 refreshIcon.classList.add('fa-spin');
                 
-                const response = await fetch(url);
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
+                const response = await fetch(API_ENDPOINT + queryString);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 
                 allLogs = await response.json();
                 applyFilters();
                 updateStats(allLogs);
-                
                 refreshIcon.classList.remove('fa-spin');
             } catch (err) {
                 showError(err.message);
@@ -315,22 +361,17 @@
 
         function applyFilters() {
             const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-            
             filteredLogs = allLogs.filter(log => {
-                if (searchTerm && !log.message.toLowerCase().includes(searchTerm)) {
-                    return false;
-                }
-                return true;
+                const messageMatch = log.message?.toLowerCase().includes(searchTerm);
+                const payloadMatch = log.payload ? JSON.stringify(log.payload).toLowerCase().includes(searchTerm) : false;
+                return !searchTerm || messageMatch || payloadMatch;
             });
-
-            currentPage = 1; // Reset to first page when filters change
+            currentPage = 1;
             displayLogs(filteredLogs);
         }
 
         function displayLogs(logs) {
             document.getElementById('loading').classList.add('hidden');
-            document.getElementById('error').classList.add('hidden');
-            
             const container = document.getElementById('logsContainer');
             const paginationDiv = document.getElementById('pagination');
             
@@ -345,129 +386,162 @@
             paginationDiv.classList.remove('hidden');
             document.getElementById('emptyState').classList.add('hidden');
             
-            // Get current items per page value
-            const currentItemsPerPage = parseInt(document.getElementById('itemsPerPage').value) || itemsPerPage;
+            const totalPages = Math.ceil(logs.length / itemsPerPage);
+            if (currentPage > totalPages) currentPage = totalPages || 1;
             
-            // Calculate pagination
-            const totalPages = Math.ceil(logs.length / currentItemsPerPage);
-            
-            // Ensure current page is within bounds
-            if (currentPage > totalPages) {
-                currentPage = totalPages || 1;
-            }
-            
-            const startIndex = (currentPage - 1) * currentItemsPerPage;
-            const endIndex = Math.min(startIndex + currentItemsPerPage, logs.length);
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, logs.length);
             const paginatedLogs = logs.slice(startIndex, endIndex);
             
-            // Display logs
             container.innerHTML = paginatedLogs.map(log => createLogCard(log)).join('');
-            
-            // Update pagination UI
-            updatePaginationUI(logs.length, totalPages, currentItemsPerPage);
-        }
-
-        function updatePaginationUI(totalItems, totalPages, currentItemsPerPage) {
-            const startIndex = (currentPage - 1) * currentItemsPerPage;
-            const endIndex = Math.min(startIndex + currentItemsPerPage, totalItems);
-            
-            document.getElementById('showingStart').textContent = totalItems > 0 ? startIndex + 1 : 0;
-            document.getElementById('showingEnd').textContent = endIndex;
-            document.getElementById('showingTotal').textContent = totalItems;
-            
-            // Update buttons state
-            document.getElementById('firstPage').disabled = currentPage === 1;
-            document.getElementById('prevPage').disabled = currentPage === 1;
-            document.getElementById('nextPage').disabled = currentPage === totalPages;
-            document.getElementById('lastPage').disabled = currentPage === totalPages;
-            
-            // Generate page numbers
-            const pageNumbersDiv = document.getElementById('pageNumbers');
-            pageNumbersDiv.innerHTML = '';
-            
-            const maxVisiblePages = 5;
-            let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
-            let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
-            
-            if (endPage - startPage < maxVisiblePages - 1) {
-                startPage = Math.max(1, endPage - maxVisiblePages + 1);
-            }
-            
-            for (let i = startPage; i <= endPage; i++) {
-                const pageBtn = document.createElement('button');
-                pageBtn.textContent = i;
-                pageBtn.className = `px-3 py-2 rounded-lg transition hover:opacity-80 text-sm ${i === currentPage ? 'bg-blue-600 text-white' : ''}`;
-                if (i !== currentPage) {
-                    pageBtn.style.backgroundColor = 'var(--bg-tertiary)';
-                }
-                pageBtn.addEventListener('click', () => {
-                    currentPage = i;
-                    displayLogs(filteredLogs);
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                });
-                pageNumbersDiv.appendChild(pageBtn);
-            }
+            updatePaginationUI(logs.length, totalPages);
+            updateSelectionUI();
         }
 
         function createLogCard(log) {
             const date = new Date(log.created_at);
-            const time = date.toLocaleTimeString();
-            const dateStr = date.toLocaleDateString();
             const config = levelConfig[log.level] || levelConfig.info;
+            const isSelected = selectedLogIds.has(String(log.id));
             
             return `
-                <div class="log-entry border ${config.bg} rounded-lg p-4 transition-all duration-200">
-                    <div class="flex items-start gap-4">
-                        <div class="flex-shrink-0">
-                            <i class="${config.icon} ${config.color} text-2xl"></i>
+                <div class="log-entry border ${config.bg} rounded-lg p-4 transition-all duration-200 cursor-pointer ${isSelected ? 'log-selected' : ''}" 
+                     data-id="${log.id}" onclick="toggleSelect('${log.id}')">
+                    
+                    <div class="flex items-start gap-3">
+                        <!-- Select Checkbox -->
+                        <div class="flex-shrink-0 mt-1">
+                            <div class="custom-checkbox">
+                                ${isSelected ? '<i class="fas fa-check text-[10px] text-white"></i>' : ''}
+                            </div>
                         </div>
-                        
+
                         <div class="flex-1 min-w-0">
                             <div class="flex items-start justify-between gap-4 mb-2">
                                 <div class="flex items-center gap-2 flex-wrap">
-                                    <span class="px-2 py-0.5 rounded text-xs font-semibold ${config.badge} code-font">${config.name}</span>
-                                    ${log.platform ? `<span class="px-2 py-0.5 rounded text-xs bg-slate-700 text-slate-300 code-font">${log.platform}</span>` : ''}
-                                    ${log.source ? `<span class="px-2 py-0.5 rounded text-xs bg-slate-700 text-slate-300 code-font">${log.source}</span>` : ''}
+                                    <span class="px-2 py-0.5 rounded text-[10px] font-bold ${config.badge} code-font">${config.name}</span>
+                                    ${log.platform ? `<span class="px-2 py-0.5 rounded text-[10px] bg-slate-700/50 text-slate-300 code-font">${log.platform}</span>` : ''}
+                                    <span class="text-[10px] text-slate-500 code-font">${date.toLocaleString()}</span>
                                 </div>
-                                <div class="text-xs text-slate-400 code-font flex-shrink-0">
-                                    <div>${time}</div>
-                                    <div class="text-slate-500">${dateStr}</div>
+                                <div class="flex items-center gap-2">
+                                    <button onclick="copySingleLog(event, '${log.id}')" title="Copy Log" class="w-8 h-8 rounded-full hover:bg-white/20 flex items-center justify-center transition text-slate-400 hover:text-blue-500">
+                                        <i class="fas fa-copy text-sm"></i>
+                                    </button>
                                 </div>
                             </div>
                             
-                            <div class="mb-3">
-                                <p class="text-slate-100 code-font text-sm leading-relaxed">${escapeHtml(log.message || 'No message')}</p>
-                            </div>
+                            <p class="text-slate-100 code-font text-sm leading-relaxed mb-2 break-words">${escapeHtml(log.message || 'No message')}</p>
                             
-                            ${log.payload && log.payload.length > 0 ? `
-                                <details class="group">
-                                    <summary class="cursor-pointer text-xs text-blue-400 hover:text-blue-300 font-medium inline-flex items-center gap-1">
-                                        <i class="fas fa-chevron-right group-open:rotate-90 transition-transform text-xs"></i>
-                                        Payload (${log.payload.length} items)
+                            ${log.payload && Object.keys(log.payload).length > 0 ? `
+                                <details class="group mt-2" onclick="event.stopPropagation()">
+                                    <summary class="cursor-pointer text-[11px] text-blue-400 hover:text-blue-300 font-medium inline-flex items-center gap-1 list-none">
+                                        <i class="fas fa-caret-right group-open:rotate-90 transition-transform"></i>
+                                        Payload Data
                                     </summary>
-                                    <pre class="mt-2 p-3 bg-slate-950 border border-slate-700 rounded text-xs overflow-x-auto code-font text-slate-300">${JSON.stringify(log.payload, null, 2)}</pre>
+                                    <pre class="mt-2 p-3 bg-black/40 border border-white/5 rounded text-[10px] overflow-x-auto code-font text-slate-300">${JSON.stringify(log.payload, null, 2)}</pre>
                                 </details>
                             ` : ''}
-                            
-                            <div class="flex items-center gap-3 mt-3 text-xs text-slate-500 code-font">
-                                <span>ID: <span class="text-slate-400">${log.id}</span></span>
-                                ${log.app_version ? `<span>v${log.app_version}</span>` : ''}
-                            </div>
                         </div>
                     </div>
                 </div>
             `;
         }
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+        function toggleSelect(id) {
+            id = String(id);
+            if (selectedLogIds.has(id)) {
+                selectedLogIds.delete(id);
+            } else {
+                selectedLogIds.add(id);
+            }
+            updateSelectionUI();
+            
+            // Re-render only the target element visually for performance
+            const el = document.querySelector(`[data-id="${id}"]`);
+            if (el) {
+                el.classList.toggle('log-selected', selectedLogIds.has(id));
+                const checkbox = el.querySelector('.custom-checkbox');
+                checkbox.innerHTML = selectedLogIds.has(id) ? '<i class="fas fa-check text-[10px] text-white"></i>' : '';
+            }
+        }
+
+        function updateSelectionUI() {
+            const count = selectedLogIds.size;
+            const toolbar = document.getElementById('selectionToolbar');
+            const header = document.getElementById('selectionHeader');
+            
+            if (count > 0) {
+                toolbar.classList.add('visible');
+                header.classList.remove('hidden');
+                document.getElementById('selectedCount').textContent = count;
+                document.getElementById('headerSelectedCount').textContent = count;
+            } else {
+                toolbar.classList.remove('visible');
+                header.classList.add('hidden');
+            }
+        }
+
+        function copyToClipboard(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                showToast('Copied to clipboard!');
+            } catch (err) {
+                console.error('Copy failed', err);
+            }
+            document.body.removeChild(textarea);
+        }
+
+        function showToast(msg) {
+            const toast = document.createElement('div');
+            toast.className = 'fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 px-6 py-3 bg-black/80 text-white rounded-full text-sm font-bold z-[100] animate-bounce';
+            toast.textContent = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+        }
+
+        function copySingleLog(event, id) {
+            event.stopPropagation();
+            const log = allLogs.find(l => String(l.id) === String(id));
+            if (log) {
+                const text = `[${log.level.toUpperCase()}] ${new Date(log.created_at).toLocaleString()}\n${log.message}\nPayload: ${JSON.stringify(log.payload, null, 2)}`;
+                copyToClipboard(text);
+            }
+        }
+
+        function updatePaginationUI(totalItems, totalPages) {
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
+            
+            document.getElementById('showingStart').textContent = totalItems > 0 ? startIndex + 1 : 0;
+            document.getElementById('showingEnd').textContent = endIndex;
+            document.getElementById('showingTotal').textContent = totalItems;
+            
+            document.getElementById('firstPage').disabled = currentPage === 1;
+            document.getElementById('prevPage').disabled = currentPage === 1;
+            document.getElementById('nextPage').disabled = currentPage === totalPages;
+            document.getElementById('lastPage').disabled = currentPage === totalPages;
+            
+            const pageNumbersDiv = document.getElementById('pageNumbers');
+            pageNumbersDiv.innerHTML = '';
+            
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, startPage + 4);
+            
+            for (let i = startPage; i <= endPage; i++) {
+                const pageBtn = document.createElement('button');
+                pageBtn.textContent = i;
+                pageBtn.className = `w-8 h-8 rounded-lg transition text-xs font-bold ${i === currentPage ? 'bg-blue-600 text-white shadow-lg' : 'hover:bg-blue-500/10'}`;
+                if (i !== currentPage) pageBtn.style.backgroundColor = 'var(--bg-tertiary)';
+                pageBtn.onclick = () => { currentPage = i; displayLogs(filteredLogs); window.scrollTo({ top: 0 }); };
+                pageNumbersDiv.appendChild(pageBtn);
+            }
         }
 
         function updateStats(logs) {
             document.getElementById('totalCount').textContent = logs.length;
-            
             const counts = { log: 0, warn: 0, error: 0 };
             logs.forEach(l => counts[l.level] = (counts[l.level] || 0) + 1);
             
@@ -476,91 +550,80 @@
             document.getElementById('errorCount').textContent = counts.error || 0;
             
             const platforms = [...new Set(logs.map(l => l.platform).filter(Boolean))];
-            document.getElementById('platformInfo').textContent = platforms.join(', ') || 'N/A';
+            document.getElementById('platformInfo').textContent = platforms[0] || 'N/A';
+            document.getElementById('platformInfo').title = platforms.join(', ');
         }
 
-        // Event listeners
-        document.getElementById('refreshBtn').addEventListener('click', fetchLogs);
-        document.getElementById('clearBtn').addEventListener('click', () => {
-            allLogs = [];
-            displayLogs([]);
-            updateStats([]);
-        });
-        document.getElementById('filterAll').addEventListener('change', fetchLogs);
-        document.getElementById('filterLog').addEventListener('change', fetchLogs);
-        document.getElementById('filterWarn').addEventListener('change', fetchLogs);
-        document.getElementById('filterError').addEventListener('change', fetchLogs);
-        document.getElementById('searchInput').addEventListener('input', applyFilters);
+        function escapeHtml(text) {
+            if (!text) return '';
+            return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+        }
 
-        // Pagination event listeners
+        // Global Event Listeners
+        document.getElementById('refreshBtn').addEventListener('click', fetchLogs);
+        document.getElementById('clearBtn').addEventListener('click', () => { allLogs = []; displayLogs([]); updateStats([]); });
+        ['filterAll', 'filterLog', 'filterWarn', 'filterError'].forEach(id => {
+            document.getElementById(id).addEventListener('change', fetchLogs);
+        });
+        document.getElementById('searchInput').addEventListener('input', applyFilters);
         document.getElementById('itemsPerPage').addEventListener('change', (e) => {
             itemsPerPage = parseInt(e.target.value);
             currentPage = 1;
             displayLogs(filteredLogs);
         });
 
-        document.getElementById('firstPage').addEventListener('click', () => {
-            currentPage = 1;
+        // Pagination buttons
+        document.getElementById('firstPage').onclick = () => { currentPage = 1; displayLogs(filteredLogs); };
+        document.getElementById('prevPage').onclick = () => { if(currentPage > 1) { currentPage--; displayLogs(filteredLogs); } };
+        document.getElementById('nextPage').onclick = () => { 
+            const totalPages = Math.ceil(filteredLogs.length / itemsPerPage);
+            if(currentPage < totalPages) { currentPage++; displayLogs(filteredLogs); } 
+        };
+        document.getElementById('lastPage').onclick = () => { 
+            currentPage = Math.ceil(filteredLogs.length / itemsPerPage); 
+            displayLogs(filteredLogs); 
+        };
+
+        // Selection Actions
+        document.getElementById('selectAllBtn').onclick = () => {
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, filteredLogs.length);
+            filteredLogs.slice(startIndex, endIndex).forEach(l => selectedLogIds.add(String(l.id)));
             displayLogs(filteredLogs);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        });
+        };
 
-        document.getElementById('prevPage').addEventListener('click', () => {
-            if (currentPage > 1) {
-                currentPage--;
-                displayLogs(filteredLogs);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            }
-        });
-
-        document.getElementById('nextPage').addEventListener('click', () => {
-            const currentItemsPerPage = parseInt(document.getElementById('itemsPerPage').value) || itemsPerPage;
-            const totalPages = Math.ceil(filteredLogs.length / currentItemsPerPage);
-            if (currentPage < totalPages) {
-                currentPage++;
-                displayLogs(filteredLogs);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            }
-        });
-
-        document.getElementById('lastPage').addEventListener('click', () => {
-            const currentItemsPerPage = parseInt(document.getElementById('itemsPerPage').value) || itemsPerPage;
-            const totalPages = Math.ceil(filteredLogs.length / currentItemsPerPage);
-            currentPage = totalPages;
+        document.getElementById('deselectAllBtn').onclick = () => {
+            selectedLogIds.clear();
             displayLogs(filteredLogs);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        });
+        };
 
-        // Auto-refresh every 30 seconds
-       //setInterval(fetchLogs, 30000); 
+        document.getElementById('cancelSelectionBtn').onclick = () => {
+            selectedLogIds.clear();
+            displayLogs(filteredLogs);
+        };
 
+        document.getElementById('copySelectedBtn').onclick = () => {
+            const selectedData = allLogs
+                .filter(l => selectedLogIds.has(String(l.id)))
+                .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+                .map(l => `[${l.level.toUpperCase()}] ${new Date(l.created_at).toLocaleString()} | ${l.platform || 'WEB'}\nMSG: ${l.message}\nPAYLOAD: ${JSON.stringify(l.payload)}\n-------------------`)
+                .join('\n');
+            
+            copyToClipboard(selectedData);
+        };
+
+        // Theme
         const themeToggle = document.getElementById('themeToggle');
-        const themeIcon = document.getElementById('themeIcon');
-
         function setTheme(theme) {
             document.body.classList.remove('light-theme', 'dark-theme');
             document.body.classList.add(theme);
-
-            if (theme === 'dark-theme') {
-                themeIcon.className = 'fas fa-moon';
-            } else {
-                themeIcon.className = 'fas fa-sun';
-            }
-
+            document.getElementById('themeIcon').className = theme === 'dark-theme' ? 'fas fa-moon' : 'fas fa-sun';
             localStorage.setItem('theme', theme);
         }
+        themeToggle.addEventListener('click', () => setTheme(document.body.classList.contains('dark-theme') ? 'light-theme' : 'dark-theme'));
+        setTheme(localStorage.getItem('theme') || 'dark-theme');
 
-        // Toggle on click
-        themeToggle.addEventListener('click', () => {
-            const isDark = document.body.classList.contains('dark-theme');
-            setTheme(isDark ? 'light-theme' : 'dark-theme');
-        });
-
-        // Load saved theme
-        const savedTheme = localStorage.getItem('theme') || 'dark-theme';
-        setTheme(savedTheme);
-
-        // Initial load
+        // Init
         fetchLogs();
     </script>
 </body>
