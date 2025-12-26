@@ -221,35 +221,6 @@ router.put('/read-all', authenticateToken, async (req, res) => {
 });
 
 /**
- * Delete notification
- * DELETE /api/notifications/:id
- */
-router.delete('/:id', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const result = await Notification.destroy({
-      where: { 
-        id: id,
-        userId: req.user.id 
-      }
-    });
-
-    if (result === 0) {
-      return res.status(404).json({ error: 'Notification not found' });
-    }
-
-    res.json({
-      success: true,
-      message: 'Notification deleted successfully'
-    });
-  } catch (error) {
-    console.error('Delete notification error:', error);
-    res.status(500).json({ error: 'Failed to delete notification' });
-  }
-});
-
-/**
  * Delete multiple notifications
  * DELETE /api/notifications/bulk
  */
@@ -297,6 +268,35 @@ router.delete('/clear-all', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Clear all notifications error:', error);
     res.status(500).json({ error: 'Failed to clear all notifications' });
+  }
+});
+
+/**
+ * Delete notification
+ * DELETE /api/notifications/:id
+ */
+router.delete('/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await Notification.destroy({
+      where: { 
+        id: id,
+        userId: req.user.id 
+      }
+    });
+
+    if (result === 0) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Notification deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete notification error:', error);
+    res.status(500).json({ error: 'Failed to delete notification' });
   }
 });
 
