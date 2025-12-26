@@ -142,4 +142,162 @@ router.get('/history', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * Mark notification as read
+ * PUT /api/notifications/:id/read
+ */
+router.put('/:id/read', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const notification = await Notification.findOne({
+      where: { 
+        id: id,
+        userId: req.user.id 
+      }
+    });
+
+    if (!notification) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    // Add isRead field to the notification
+    await notification.update({ 
+      data: {
+        ...notification.data,
+        isRead: true,
+        readAt: new Date().toISOString()
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Notification marked as read'
+    });
+  } catch (error) {
+    console.error('Mark notification as read error:', error);
+    res.status(500).json({ error: 'Failed to mark notification as read' });
+  }
+});
+
+/**
+ * Mark all notifications as read
+ * PUT /api/notifications/read-all
+ */
+router.put('/read-all', authenticateToken, async (req, res) => {
+  try {
+    await Notification.update(
+      { 
+        data: Notification.sequelize.fn(
+          'JSON_SET',
+          Notification.sequelize.col('data'),
+          '$.isRead',
+          true,
+          '$.readAt',
+          new Date().toISOString()
+        )
+      },
+      { 
+        where: { 
+          userId: req.user.id,
+          // Only update unread notifications
+          data: {
+            [Notification.sequelize.Op.not]: {
+              [Notification.sequelize.Op.like]: '%"isRead":true%'
+            }
+          }
+        }
+      }
+    );
+
+    res.json({
+      success: true,
+      message: 'All notifications marked as read'
+    });
+  } catch (error) {
+    console.error('Mark all notifications as read error:', error);
+    res.status(500).json({ error: 'Failed to mark all notifications as read' });
+  }
+});
+
+/**
+ * Delete notification
+ * DELETE /api/notifications/:id
+ */
+router.delete('/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await Notification.destroy({
+      where: { 
+        id: id,
+        userId: req.user.id 
+      }
+    });
+
+    if (result === 0) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Notification deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete notification error:', error);
+    res.status(500).json({ error: 'Failed to delete notification' });
+  }
+});
+
+/**
+ * Delete multiple notifications
+ * DELETE /api/notifications/bulk
+ */
+router.delete('/bulk', authenticateToken, async (req, res) => {
+  try {
+    const { notificationIds } = req.body;
+
+    if (!notificationIds || !Array.isArray(notificationIds)) {
+      return res.status(400).json({ error: 'Notification IDs array is required' });
+    }
+
+    const result = await Notification.destroy({
+      where: { 
+        id: notificationIds,
+        userId: req.user.id 
+      }
+    });
+
+    res.json({
+      success: true,
+      message: `${result} notification(s) deleted successfully`,
+      deletedCount: result
+    });
+  } catch (error) {
+    console.error('Bulk delete notifications error:', error);
+    res.status(500).json({ error: 'Failed to delete notifications' });
+  }
+});
+
+/**
+ * Clear all notifications
+ * DELETE /api/notifications/clear-all
+ */
+router.delete('/clear-all', authenticateToken, async (req, res) => {
+  try {
+    const result = await Notification.destroy({
+      where: { userId: req.user.id }
+    });
+
+    res.json({
+      success: true,
+      message: `All ${result} notification(s) cleared successfully`,
+      deletedCount: result
+    });
+  } catch (error) {
+    console.error('Clear all notifications error:', error);
+    res.status(500).json({ error: 'Failed to clear all notifications' });
+  }
+});
+
 module.exports = router;
