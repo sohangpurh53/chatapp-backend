@@ -6,6 +6,7 @@ const {
   login,
   logout,
   getProfile,
+  updateProfile,
   getUserPublicKey,
   getUserInfo,
   uploadKeys,
@@ -16,6 +17,7 @@ router.post('/register', register);
 router.post('/login', login);
 router.post('/logout', authenticateToken, logout);
 router.get('/profile', authenticateToken, getProfile);
+router.put('/profile', authenticateToken, updateProfile);
 router.get('/users/:userId/public-key', authenticateToken, getUserPublicKey);
 router.get('/users/:userId', authenticateToken, getUserInfo);
 

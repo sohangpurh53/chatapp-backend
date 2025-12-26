@@ -34,7 +34,10 @@ class CallController {
       });
 
       res.json({
-        data: calls.rows,
+        data: calls.rows.map(call => ({
+          ...call.toJSON(),
+          callId: call.id // Map database 'id' to frontend 'callId'
+        })),
         pagination: {
           total: calls.count,
           page: parseInt(page),

@@ -251,11 +251,116 @@ const getUserInfo = async (req, res) => {
   }
 };
 
+const updateProfile = async (req, res) => {
+  try {
+    const { username, email, avatar } = req.body;
+    const userId = req.user.id;
+
+    // Validate input
+    if (!username && !email && avatar === undefined) {
+      return res.status(400).json({
+        error: 'At least one field (username, email, or avatar) is required'
+      });
+    }
+
+    // Prepare update data
+    const updateData = {};
+    
+    if (username) {
+      if (username.trim().length < 2) {
+        return res.status(400).json({
+          error: 'Username must be at least 2 characters long'
+        });
+      }
+      
+      // Check if username is already taken by another user
+      const existingUser = await User.findOne({
+        where: {
+          username: username.trim(),
+          id: { [Op.ne]: userId }
+        }
+      });
+      
+      if (existingUser) {
+        return res.status(400).json({
+          error: 'Username is already taken'
+        });
+      }
+      
+      updateData.username = username.trim();
+    }
+
+    if (email) {
+      // Basic email validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({
+          error: 'Please enter a valid email address'
+        });
+      }
+      
+      // Check if email is already taken by another user
+      const existingUser = await User.findOne({
+        where: {
+          email: email.trim().toLowerCase(),
+          id: { [Op.ne]: userId }
+        }
+      });
+      
+      if (existingUser) {
+        return res.status(400).json({
+          error: 'Email is already taken'
+        });
+      }
+      
+      updateData.email = email.trim().toLowerCase();
+    }
+
+    if (avatar !== undefined) {
+      updateData.avatar = avatar;
+    }
+
+    // Update user profile
+    await User.update(updateData, {
+      where: { id: userId }
+    });
+
+    // Get updated user data
+    const updatedUser = await User.findByPk(userId, {
+      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey']
+    });
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        email: updatedUser.email,
+        avatar: updatedUser.avatar,
+        isOnline: updatedUser.isOnline,
+        publicKey: updatedUser.publicKey
+      }
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    
+    // Handle Sequelize validation errors
+    if (error.name === 'SequelizeValidationError') {
+      return res.status(400).json({
+        error: error.errors.map(e => e.message).join(', ')
+      });
+    }
+    
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   register,
   login,
   logout,
   getProfile,
+  updateProfile,
   getUserPublicKey,
   getUserInfo,
   uploadKeys,
