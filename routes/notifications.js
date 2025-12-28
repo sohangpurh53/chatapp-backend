@@ -2,25 +2,50 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const fcmService = require('../services/fcmService');
+const deviceService = require('../services/deviceService');
 const { User, Notification } = require('../models');
 
 /**
- * Register FCM token
+ * Register FCM token with device information
  * POST /api/notifications/register-token
  */
 router.post('/register-token', authenticateToken, async (req, res) => {
   try {
-    const { fcmToken } = req.body;
+    const { 
+      fcmToken, 
+      deviceId, 
+      deviceName, 
+      deviceType, 
+      platform, 
+      appVersion,
+      notificationPreferences 
+    } = req.body;
 
     if (!fcmToken) {
       return res.status(400).json({ error: 'FCM token is required' });
     }
 
-    await fcmService.registerToken(req.user.id, fcmToken);
+    // Get client IP and user agent
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    const userAgent = req.get('User-Agent');
+
+    const deviceInfo = {
+      deviceId: deviceId || `fcm_${fcmToken.substring(0, 16)}`, // Fallback device ID
+      deviceName: deviceName || 'Unknown Device',
+      deviceType: deviceType || 'android',
+      platform,
+      appVersion,
+      fcmToken,
+      ipAddress,
+      userAgent,
+      notificationPreferences
+    };
+
+    await fcmService.registerToken(req.user.id, fcmToken, deviceInfo);
 
     res.json({
       success: true,
-      message: 'FCM token registered successfully'
+      message: 'FCM token and device registered successfully'
     });
   } catch (error) {
     console.error('Register token error:', error);
@@ -29,20 +54,99 @@ router.post('/register-token', authenticateToken, async (req, res) => {
 });
 
 /**
- * Remove FCM token (on logout)
+ * Deactivate device (on logout)
  * POST /api/notifications/remove-token
  */
 router.post('/remove-token', authenticateToken, async (req, res) => {
   try {
-    await fcmService.removeToken(req.user.id);
+    const { deviceId } = req.body;
+
+    await fcmService.removeToken(req.user.id, deviceId);
 
     res.json({
       success: true,
-      message: 'FCM token removed successfully'
+      message: 'Device deactivated successfully'
     });
   } catch (error) {
     console.error('Remove token error:', error);
-    res.status(500).json({ error: 'Failed to remove token' });
+    res.status(500).json({ error: 'Failed to deactivate device' });
+  }
+});
+
+/**
+ * Get user devices
+ * GET /api/notifications/devices
+ */
+router.get('/devices', authenticateToken, async (req, res) => {
+  try {
+    const { activeOnly = 'false' } = req.query;
+
+    let devices;
+    if (activeOnly === 'true') {
+      devices = await deviceService.getActiveDevices(req.user.id);
+    } else {
+      devices = await deviceService.getAllDevices(req.user.id);
+    }
+
+    const stats = await deviceService.getDeviceStats(req.user.id);
+
+    res.json({
+      success: true,
+      devices,
+      stats
+    });
+  } catch (error) {
+    console.error('Get devices error:', error);
+    res.status(500).json({ error: 'Failed to fetch devices' });
+  }
+});
+
+/**
+ * Logout from all devices
+ * POST /api/notifications/logout-all-devices
+ */
+router.post('/logout-all-devices', authenticateToken, async (req, res) => {
+  try {
+    const { exceptCurrentDevice = false } = req.body;
+    const currentDeviceId = req.body.currentDeviceId;
+
+    const result = await deviceService.logoutAllDevices(
+      req.user.id, 
+      exceptCurrentDevice ? currentDeviceId : null
+    );
+
+    res.json({
+      success: true,
+      message: `Logged out from ${result.loggedOutCount} device(s)`,
+      loggedOutCount: result.loggedOutCount
+    });
+  } catch (error) {
+    console.error('Logout all devices error:', error);
+    res.status(500).json({ error: 'Failed to logout from all devices' });
+  }
+});
+
+/**
+ * Update device activity (heartbeat)
+ * POST /api/notifications/device-heartbeat
+ */
+router.post('/device-heartbeat', authenticateToken, async (req, res) => {
+  try {
+    const { deviceId } = req.body;
+
+    if (!deviceId) {
+      return res.status(400).json({ error: 'Device ID is required' });
+    }
+
+    await deviceService.updateDeviceActivity(req.user.id, deviceId);
+
+    res.json({
+      success: true,
+      message: 'Device activity updated'
+    });
+  } catch (error) {
+    console.error('Device heartbeat error:', error);
+    res.status(500).json({ error: 'Failed to update device activity' });
   }
 });
 

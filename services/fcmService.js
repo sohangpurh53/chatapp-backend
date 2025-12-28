@@ -1,21 +1,30 @@
 const { getMessaging } = require('../config/firebase');
-const { User, Notification } = require('../models');
+const { User, Notification, UserDevice } = require('../models');
+const { Op } = require('sequelize');
+const deviceService = require('./deviceService');
 
 class FCMService {
   /**
-   * Register or update FCM token for a user
+   * Register or update FCM token for a user device
    */
-  async registerToken(userId, fcmToken) {
+  async registerToken(userId, fcmToken, deviceInfo = {}) {
     try {
-      await User.update(
-        {
-          fcmToken,
-          fcmTokenUpdatedAt: new Date()
-        },
-        { where: { id: userId } }
-      );
-      console.log(`✅ FCM token registered for user ${userId}`);
-      return { success: true };
+      // If no device info provided, try to update existing device or create a default one
+      if (!deviceInfo.deviceId) {
+        // Generate a device ID based on FCM token (fallback)
+        deviceInfo.deviceId = `fcm_${fcmToken.substring(0, 16)}`;
+        deviceInfo.deviceName = 'Unknown Device';
+        deviceInfo.deviceType = 'android'; // Default assumption
+      }
+
+      // Register/update device with FCM token
+      const result = await deviceService.registerDevice(userId, {
+        ...deviceInfo,
+        fcmToken
+      });
+
+      console.log(`✅ FCM token registered for user ${userId} device ${deviceInfo.deviceId}`);
+      return { success: true, device: result.device };
     } catch (error) {
       console.error('FCM token registration error:', error);
       throw error;
@@ -23,18 +32,22 @@ class FCMService {
   }
 
   /**
-   * Remove FCM token (on logout)
+   * Deactivate device (on logout) - don't remove FCM token, just mark device as inactive
    */
-  async removeToken(userId) {
+  async removeToken(userId, deviceId = null) {
     try {
-      await User.update(
-        { fcmToken: null, fcmTokenUpdatedAt: null },
-        { where: { id: userId } }
-      );
-      console.log(`✅ FCM token removed for user ${userId}`);
+      if (deviceId) {
+        // Deactivate specific device
+        await deviceService.deactivateDevice(userId, deviceId);
+        console.log(`✅ Device deactivated for user ${userId}: ${deviceId}`);
+      } else {
+        // Deactivate all devices (fallback for old clients)
+        await deviceService.logoutAllDevices(userId);
+        console.log(`✅ All devices deactivated for user ${userId}`);
+      }
       return { success: true };
     } catch (error) {
-      console.error('FCM token removal error:', error);
+      console.error('Device deactivation error:', error);
       throw error;
     }
   }
@@ -63,41 +76,107 @@ class FCMService {
 
       // console.log("notification payload investigate.......", notification)
 
-      // Get user's FCM token
-      const user = await User.findByPk(userId, {
-        attributes: ['fcmToken', 'notificationPreferences']
-      });
+      // Get user's active FCM tokens from devices
+      const activeTokens = await deviceService.getActiveFCMTokens(userId);
 
-      if (!user || !user.fcmToken) {
-        console.log(`⚠️  No FCM token for user ${userId}`);
+      if (!activeTokens || activeTokens.length === 0) {
+        console.log(`⚠️  No active FCM tokens for user ${userId}`);
         // Only update if notification has an id (database record)
         if (notification.id) {
           await Notification.update(
             {
               status: 'failed',
-              error: 'No FCM token'
+              error: 'No active FCM tokens'
             },
             { where: { id: notification.id } }
           );
         }
-        return { success: false, reason: 'no_token' };
+        return { success: false, reason: 'no_active_tokens' };
       }
 
-      // Check notification preferences
-      const prefs = user.notificationPreferences || {};
-      if (!this.shouldSendNotification(notification.type, prefs)) {
-        console.log(`⚠️  Notification disabled by user preferences for user ${userId}`);
-        // Only update if notification has an id (database record)
+      console.log(`📱 Found ${activeTokens.length} active device(s) for user ${userId}`);
+
+      // Send to all active devices
+      const results = [];
+      for (const tokenInfo of activeTokens) {
+        try {
+          const result = await this.sendToDevice(userId, notification, tokenInfo);
+          results.push(result);
+        } catch (error) {
+          console.error(`❌ Failed to send to device ${tokenInfo.deviceId}:`, error);
+          results.push({ success: false, error: error.message, deviceId: tokenInfo.deviceId });
+        }
+      }
+
+      // Check if at least one device received the notification
+      const successCount = results.filter(r => r.success).length;
+      
+      if (successCount > 0) {
+        console.log(`✅ Notification sent to ${successCount}/${activeTokens.length} devices for user ${userId}`);
+        
+        // Update notification status if it has an id
         if (notification.id) {
           await Notification.update(
             {
-              status: 'failed',
-              error: 'Disabled by user preferences'
+              status: 'sent',
+              sentAt: new Date()
             },
             { where: { id: notification.id } }
           );
         }
-        return { success: false, reason: 'disabled_by_user' };
+        
+        return { success: true, deviceResults: results };
+      } else {
+        console.log(`❌ Failed to send to all devices for user ${userId}`);
+        
+        // Update notification status if it has an id
+        if (notification.id) {
+          await Notification.update(
+            {
+              status: 'failed',
+              error: 'Failed to send to all devices'
+            },
+            { where: { id: notification.id } }
+          );
+        }
+        
+        return { success: false, reason: 'all_devices_failed', deviceResults: results };
+      }
+
+    } catch (error) {
+      console.error('FCM send error:', error);
+
+      // Log failure - only update if notification has an id (database record)
+      if (notification.id) {
+        await Notification.update(
+          {
+            status: 'failed',
+            error: error.message
+          },
+          { where: { id: notification.id } }
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  /**
+   * Send notification to a specific device
+   */
+  async sendToDevice(userId, notification, tokenInfo) {
+    try {
+      const messaging = getMessaging();
+      if (!messaging) {
+        throw new Error('Firebase not configured');
+      }
+
+      const { fcmToken, deviceId, deviceName, notificationPreferences } = tokenInfo;
+      // Check notification preferences for this device
+      const prefs = notificationPreferences || {};
+      if (!this.shouldSendNotification(notification.type, prefs)) {
+        console.log(`⚠️  Notification disabled by device preferences for user ${userId} device ${deviceId}`);
+        return { success: false, reason: 'disabled_by_user', deviceId };
       }
 
       // Prepare data payload - all values must be strings
@@ -138,7 +217,7 @@ class FCMService {
                                  notification?.data?.type === 'incoming_call_offline';
 
       const message = {
-        token: user.fcmToken,
+        token: fcmToken,
         // ✅ Only include notification for non-call types
         ...((!isCallNotification) && {
           notification: {
@@ -206,7 +285,8 @@ class FCMService {
       // ✅ DEBUG: Log the message structure for call notifications
       if (isCallNotification) {
         console.log('📱 FCM Call Notification Payload:');
-        console.log('- Token:', user.fcmToken ? 'Present' : 'Missing');
+        console.log('- Device:', `${deviceName} (${deviceId})`);
+        console.log('- Token:', fcmToken ? 'Present' : 'Missing');
         console.log('- Data keys:', Object.keys(message.data || {}));
         console.log('- Data types:', Object.keys(message.data || {}).map(key => 
           `${key}: ${typeof message.data[key]}`
@@ -226,40 +306,17 @@ class FCMService {
       // Send via FCM
       const response = await messaging.send(message);
 
-      // Log success - only update if notification has an id (database record)
-      if (notification.id) {
-        await Notification.update(
-          {
-            status: 'sent',
-            fcmMessageId: response,
-            sentAt: new Date()
-          },
-          { where: { id: notification.id } }
-        );
-      }
-
-      console.log(`✅ Notification sent to user ${userId}:`, response);
-      return { success: true, messageId: response };
+      console.log(`✅ Notification sent to device ${deviceId} (${deviceName}) for user ${userId}:`, response);
+      return { success: true, messageId: response, deviceId, deviceName };
 
     } catch (error) {
-      console.error('FCM send error:', error);
+      console.error(`FCM send error for device ${tokenInfo.deviceId}:`, error);
 
-      // Handle invalid token
+      // Handle invalid token - deactivate the device
       if (error.code === 'messaging/invalid-registration-token' ||
           error.code === 'messaging/registration-token-not-registered') {
-        console.log(`🔄 Removing invalid FCM token for user ${userId}`);
-        await this.removeToken(userId);
-      }
-
-      // Log failure - only update if notification has an id (database record)
-      if (notification.id) {
-        await Notification.update(
-          {
-            status: 'failed',
-            error: error.message
-          },
-          { where: { id: notification.id } }
-        );
+        console.log(`🔄 Deactivating device with invalid FCM token: ${tokenInfo.deviceId}`);
+        await deviceService.deactivateDevice(userId, tokenInfo.deviceId);
       }
 
       throw error;

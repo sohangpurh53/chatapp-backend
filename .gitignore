@@ -32,3 +32,10 @@ NOTIFICATION_FIX.md
 
 COMPLETE_CALLING_SYSTEM_FIXES.md
 OFFLINE_CALLING_FIX.md
+
+
+debug-fcm-registration.js
+debug-fcm-token.js
+debug-user-devices.js
+test-device-system.js
+test-device-system.js
