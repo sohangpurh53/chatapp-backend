@@ -30,6 +30,7 @@ const callRoutes = require('./routes/calls');
 const notificationRoutes = require('./routes/notifications');
 const mediaRoutes = require('./routes/media');
 const appLogsRoutes = require("./routes/applogs")
+const apkRoutes = require('./routes/apk');
 
 const app = express();
 const server = http.createServer(app);
@@ -75,6 +76,7 @@ app.use('/api/calls', callRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/media', mediaRoutes);
 app.use("/api", appLogsRoutes);
+app.use('/api/apk', apkRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -165,6 +167,8 @@ async function startServer() {
       console.log(`📊 Queue Dashboard: http://localhost:${PORT}/admin/queues`);
       console.log(`📁 Media Upload: http://localhost:${PORT}/api/media/upload`);
       console.log(`🏥 MinIO Health: http://localhost:${PORT}/api/media/health`);
+      console.log(`📱 APK Upload: http://localhost:${PORT}/api/apk/upload`);
+      console.log(`🔐 APK Service Health: http://localhost:${PORT}/api/apk/health`);
     });
   } catch (error) {
     console.error('Unable to start server:', error);

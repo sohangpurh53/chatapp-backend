@@ -18,6 +18,8 @@
     "test-fcm-notifications": "node scripts/test-fcm-notifications.js",
     "verify-fixes": "node scripts/verify-offline-calling-fix.js",
     "cleanup-signals": "node scripts/cleanup-expired-signals.js",
+    "generate-apk-key": "node scripts/generate-apk-key.js",
+    "test-apk-upload": "node test-apk-upload.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
