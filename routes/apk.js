@@ -86,7 +86,7 @@ router.post('/upload', verifyAPKUploadAuth, upload.single('file'), async (req, r
     
     // Generate unique filename with timestamp
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `${uploadType}-${timestamp}.apk`;
+    const filename = `${uploadType}.apk`;
     
     // MinIO bucket for APK files
     const bucketName = process.env.MINIO_BUCKET || 'chatapp-media';
