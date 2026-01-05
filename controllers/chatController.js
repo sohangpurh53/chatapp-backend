@@ -235,6 +235,10 @@ const getChatMessages = async (req, res) => {
     const messages = await Message.findAll({
       where: { 
         chatId,
+        // ✅ FIX: Exclude messages deleted for everyone (they should be completely removed from DB now)
+        // Since we're now using message.destroy() instead of marking as deleted,
+        // deleted messages won't appear in results automatically
+        
         // Exclude messages deleted by this user
         id: { [Op.notIn]: deletedMessageIds }
       },
@@ -657,21 +661,43 @@ const deleteMessage = async (req, res) => {
         return res.status(403).json({ error: 'Only sender can delete message for everyone' });
       }
 
-      // Check if message is within 1 hour (optional time limit)
+      // ✅ FIX: Use different time limits for media vs text
       const messageAge = Date.now() - new Date(message.createdAt).getTime();
-      const oneHour = 60 * 60 * 1000;
+      const timeLimit = (message.messageType === 'image' || message.messageType === 'video' || 
+                        message.messageType === 'audio' || message.messageType === 'file') 
+                        ? 24 * 60 * 60 * 1000 // 24 hours for media
+                        : 60 * 60 * 1000; // 1 hour for text
       
-      if (messageAge > oneHour) {
-        return res.status(400).json({ error: 'Cannot delete messages older than 1 hour for everyone' });
+      if (messageAge > timeLimit) {
+        const limitText = timeLimit === 24 * 60 * 60 * 1000 ? '24 hours' : '1 hour';
+        return res.status(400).json({ error: `Cannot delete messages older than ${limitText} for everyone` });
       }
 
-      // Mark message as deleted
-      await message.update({
-        content: 'This message was deleted',
-        isDeleted: true,
-        deletedAt: new Date(),
-        deletedBy: userId
-      });
+      // ✅ FIX: Delete media files from server
+      if (message.fileUrl && (message.messageType === 'image' || message.messageType === 'video' || 
+                             message.messageType === 'audio' || message.messageType === 'file')) {
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          
+          // Extract filename from URL
+          const urlParts = message.fileUrl.split('/');
+          const fileName = urlParts[urlParts.length - 1];
+          const filePath = path.join(__dirname, '../public/uploads', fileName);
+          
+          // Delete file if it exists
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log(`🗑️ Deleted media file: ${fileName}`);
+          }
+        } catch (fileError) {
+          console.error('Error deleting media file:', fileError);
+          // Don't fail the message deletion if file deletion fails
+        }
+      }
+
+      // ✅ FIX: Actually delete the message from database
+      await message.destroy();
 
       console.log(`Message ${messageId} deleted for everyone by user ${userId}`);
     } else {

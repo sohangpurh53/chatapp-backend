@@ -557,22 +557,44 @@ class SocketHandlers {
           return;
         }
 
-        // Check if message is within 1 hour (optional time limit)
+        // ✅ FIX: Remove time limit for media messages or make it longer (24 hours)
         const messageAge = Date.now() - new Date(message.createdAt).getTime();
-        const oneHour = 60 * 60 * 1000;
+        const timeLimit = (message.messageType === 'image' || message.messageType === 'video' || 
+                          message.messageType === 'audio' || message.messageType === 'file') 
+                          ? 24 * 60 * 60 * 1000 // 24 hours for media
+                          : 60 * 60 * 1000; // 1 hour for text
         
-        if (messageAge > oneHour) {
-          socket.emit('error', { message: 'Cannot delete messages older than 1 hour for everyone' });
+        if (messageAge > timeLimit) {
+          const limitText = timeLimit === 24 * 60 * 60 * 1000 ? '24 hours' : '1 hour';
+          socket.emit('error', { message: `Cannot delete messages older than ${limitText} for everyone` });
           return;
         }
 
-        // Mark message as deleted
-        await message.update({
-          content: 'This message was deleted',
-          isDeleted: true,
-          deletedAt: new Date(),
-          deletedBy: userId
-        });
+        // ✅ FIX: For media messages, delete file from server
+        if (message.fileUrl && (message.messageType === 'image' || message.messageType === 'video' || 
+                               message.messageType === 'audio' || message.messageType === 'file')) {
+          try {
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Extract filename from URL
+            const urlParts = message.fileUrl.split('/');
+            const fileName = urlParts[urlParts.length - 1];
+            const filePath = path.join(__dirname, '../public/uploads', fileName);
+            
+            // Delete file if it exists
+            if (fs.existsSync(filePath)) {
+              fs.unlinkSync(filePath);
+              console.log(`🗑️ Deleted media file: ${fileName}`);
+            }
+          } catch (fileError) {
+            console.error('Error deleting media file:', fileError);
+            // Don't fail the message deletion if file deletion fails
+          }
+        }
+
+        // ✅ FIX: Actually delete the message from database instead of just marking as deleted
+        await message.destroy();
 
         // Emit to all participants in the chat (including sender)
         this.io.to(`chat_${message.chatId}`).emit('message_deleted', {
@@ -659,7 +681,6 @@ class SocketHandlers {
       let failedCount = 0;
 
       if (deleteForEveryone) {
-        const oneHour = 60 * 60 * 1000;
         const now = Date.now();
 
         for (const message of messages) {
@@ -669,20 +690,44 @@ class SocketHandlers {
             continue;
           }
 
+          // ✅ FIX: Use different time limits for media vs text
+          const timeLimit = (message.messageType === 'image' || message.messageType === 'video' || 
+                            message.messageType === 'audio' || message.messageType === 'file') 
+                            ? 24 * 60 * 60 * 1000 // 24 hours for media
+                            : 60 * 60 * 1000; // 1 hour for text
+
           // Check time limit
           const messageAge = now - new Date(message.createdAt).getTime();
-          if (messageAge > oneHour) {
+          if (messageAge > timeLimit) {
             failedCount++;
             continue;
           }
 
-          // Delete message
-          await message.update({
-            content: 'This message was deleted',
-            isDeleted: true,
-            deletedAt: new Date(),
-            deletedBy: userId
-          });
+          // ✅ FIX: Delete media files from server
+          if (message.fileUrl && (message.messageType === 'image' || message.messageType === 'video' || 
+                                 message.messageType === 'audio' || message.messageType === 'file')) {
+            try {
+              const fs = require('fs');
+              const path = require('path');
+              
+              // Extract filename from URL
+              const urlParts = message.fileUrl.split('/');
+              const fileName = urlParts[urlParts.length - 1];
+              const filePath = path.join(__dirname, '../public/uploads', fileName);
+              
+              // Delete file if it exists
+              if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+                console.log(`🗑️ Bulk deleted media file: ${fileName}`);
+              }
+            } catch (fileError) {
+              console.error('Error deleting media file:', fileError);
+              // Don't fail the message deletion if file deletion fails
+            }
+          }
+
+          // ✅ FIX: Actually delete the message from database
+          await message.destroy();
 
           // Emit to all participants
           this.io.to(`chat_${message.chatId}`).emit('message_deleted', {
