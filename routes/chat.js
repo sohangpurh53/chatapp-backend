@@ -27,6 +27,13 @@ router.put('/:chatId/info', authenticateToken, updateGroupInfo);
 // Message management routes
 router.post('/messages/:messageId/read', authenticateToken, markMessageAsRead);
 
+// Chat settings routes
+router.put('/:chatId/settings', authenticateToken, require('../controllers/chatController').updateChatSettings);
+router.get('/:chatId/settings', authenticateToken, require('../controllers/chatController').getChatSettings);
+
+// Clear chat route
+router.delete('/:chatId/clear', authenticateToken, require('../controllers/chatController').clearChat);
+
 // Encryption key management routes
 router.get('/:chatId/group-key', authenticateToken, getGroupKey);
 router.post('/create-group-with-keys', authenticateToken, createGroupWithKeys);

@@ -925,6 +925,151 @@ const leaveGroup = async (req, res) => {
   }
 };
 
+// Update chat settings (mute, etc.)
+const updateChatSettings = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.user.id;
+    const { muteNotifications, disappearingMessages, disappearingMessagesDuration } = req.body;
+
+    // Find the chat and verify user has access
+    const chat = await Chat.findByPk(chatId, {
+      include: [
+        {
+          model: User,
+          as: 'participants',
+          where: { id: userId },
+          required: true
+        }
+      ]
+    });
+
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found or access denied' });
+    }
+
+    // Update settings
+    const currentSettings = chat.settings || {};
+    const newSettings = {
+      ...currentSettings,
+      ...(muteNotifications !== undefined && { muteNotifications }),
+      ...(disappearingMessages !== undefined && { disappearingMessages }),
+      ...(disappearingMessagesDuration !== undefined && { disappearingMessagesDuration })
+    };
+
+    await chat.update({ settings: newSettings });
+
+    res.json({
+      success: true,
+      message: 'Chat settings updated successfully',
+      settings: newSettings
+    });
+  } catch (error) {
+    console.error('Error updating chat settings:', error);
+    res.status(500).json({ error: 'Failed to update chat settings' });
+  }
+};
+
+// Get chat settings
+const getChatSettings = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.user.id;
+
+    // Find the chat and verify user has access
+    const chat = await Chat.findByPk(chatId, {
+      include: [
+        {
+          model: User,
+          as: 'participants',
+          where: { id: userId },
+          required: true
+        }
+      ]
+    });
+
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found or access denied' });
+    }
+
+    res.json({
+      success: true,
+      settings: chat.settings || {
+        allowMembersToAddOthers: false,
+        allowMembersToEditGroupInfo: false,
+        muteNotifications: false,
+        disappearingMessages: false,
+        disappearingMessagesDuration: null
+      }
+    });
+  } catch (error) {
+    console.error('Error getting chat settings:', error);
+    res.status(500).json({ error: 'Failed to get chat settings' });
+  }
+};
+
+// Clear chat messages (delete all messages for current user)
+const clearChat = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.user.id;
+
+    // Verify user has access to this chat
+    const chat = await Chat.findByPk(chatId, {
+      include: [
+        {
+          model: User,
+          as: 'participants',
+          where: { id: userId },
+          required: true
+        }
+      ]
+    });
+
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found or access denied' });
+    }
+
+    // Get all messages in this chat
+    const messages = await Message.findAll({
+      where: { chatId },
+      attributes: ['id']
+    });
+
+    const messageIds = messages.map(msg => msg.id);
+
+    if (messageIds.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: 'Chat is already empty',
+        deletedCount: 0 
+      });
+    }
+
+    // Create deletion records for all messages (for this user only)
+    const deletionRecords = messageIds.map(messageId => ({
+      messageId,
+      userId,
+      deletedAt: new Date()
+    }));
+
+    await UserMessageDeletion.bulkCreate(deletionRecords, {
+      ignoreDuplicates: true // In case some messages were already deleted
+    });
+
+    console.log(`✅ User ${userId} cleared chat ${chatId} - ${messageIds.length} messages hidden`);
+
+    res.json({
+      success: true,
+      message: 'Chat cleared successfully',
+      deletedCount: messageIds.length
+    });
+  } catch (error) {
+    console.error('Clear chat error:', error);
+    res.status(500).json({ error: 'Failed to clear chat' });
+  }
+};
+
 module.exports = {
   createChat,
   getUserChats,
@@ -939,5 +1084,8 @@ module.exports = {
   deleteMessage,
   bulkDeleteMessages,
   deleteChat,
-  leaveGroup
+  leaveGroup,
+  updateChatSettings,
+  getChatSettings,
+  clearChat
 };
