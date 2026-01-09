@@ -394,51 +394,26 @@ class SocketHandlers {
         timestamp: new Date()
       });
 
-      // ✅ Send FCM only to offline participants
-      const fcmService = require('../services/fcmService');
+      // ✅ Send FCM only to offline participants using notification service
+      const notificationService = require('../services/notificationService');
       for (const participant of participants) {
         const isOnline = await redisService.getUserOnlineStatus(participant.userId);
         
         if (!isOnline) {
-          console.log(`📱 Sending FCM to offline user ${participant.userId}`);
+          console.log(`📱 Sending FCM to offline user ${participant.userId} via notification service`);
           try {
-            // ✅ Add null checks for sender data with fallback
-            let senderName = 'Unknown User';
-            let senderId = socket.userId; // Fallback to socket userId
-
-            if (completeMessage && completeMessage.sender) {
-              senderName = completeMessage.sender.username || 'Unknown User';
-              senderId = completeMessage.sender.id;
-            } else {
-              console.warn(`⚠️ Missing sender data for message ${message.id}, using fallback data`);
-              // Try to get sender info from socket or database
-              try {
-                const User = require('../models/User');
-                const senderUser = await User.findByPk(socket.userId, {
-                  attributes: ['id', 'username']
-                });
-                if (senderUser) {
-                  senderName = senderUser.username || 'Unknown User';
-                  senderId = senderUser.id;
-                }
-              } catch (userError) {
-                console.error('❌ Failed to fetch sender user data:', userError.message);
-              }
-            }
-
-            await fcmService.sendNotification(participant.userId, {
-              title: senderName,
-              body: message.isEncrypted ? '🔒 Encrypted message' : (message.content || 'New message'),
-              data: {
-                type: 'new_message',
-                messageId: completeMessage ? completeMessage.id : message.id,
-                chatId: completeMessage ? completeMessage.chatId : chatId,
-                senderId: senderId,
-                senderName: senderName
-              }
+            // ✅ Use notification service to send complete chat data
+            await notificationService.notifyNewMessage({
+              messageId: message.id,
+              senderId: socket.userId,
+              receiverId: participant.userId,
+              chatId: chatId,
+              content: message.content,
+              isEncrypted: message.isEncrypted,
+              messageType: message.messageType
             });
           } catch (fcmError) {
-            console.error(`❌ FCM failed for user ${participant.userId}:`,"fcmfullerror:",fcmError, fcmError.message);
+            console.error(`❌ Notification service failed for user ${participant.userId}:`, "fcmfullerror:", fcmError, fcmError.message);
           }
         }
       }
