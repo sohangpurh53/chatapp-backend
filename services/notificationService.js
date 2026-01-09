@@ -1,4 +1,4 @@
-const { Notification, User } = require('../models');
+const { Notification, User, Chat, Message } = require('../models');
 const { notificationQueue } = require('../config/queue');
 
 class NotificationService {
@@ -61,10 +61,11 @@ class NotificationService {
 
   /**
    * Create and queue notification for new message
+   * ✅ ENHANCED: Include complete chat data in FCM notification
    */
   async notifyNewMessage(messageData) {
     try {
-      const { messageId, senderId, receiverId, chatId, content, isEncrypted, messageType } = messageData;
+      const { messageId, senderId, receiverId, chatId, content, isEncrypted, messageType, _completeChatData } = messageData;
 
       // Get sender info
       const sender = await User.findByPk(senderId, {
@@ -76,7 +77,70 @@ class NotificationService {
         return null;
       }
 
-      // Prepare message preview
+      // ✅ Use pre-fetched chat data if available (for group messages), otherwise fetch it
+      let completeChat = _completeChatData;
+      
+      if (!completeChat) {
+        // ✅ FETCH COMPLETE CHAT DATA with all associations
+        completeChat = await Chat.findByPk(chatId, {
+          include: [
+            {
+              model: Message,
+              as: 'messages',
+              limit: 1, // Only get the latest message (the one being sent)
+              order: [['createdAt', 'DESC']],
+              include: [
+                {
+                  model: User,
+                  as: 'sender',
+                  attributes: ['id', 'username', 'avatar', 'publicKey']
+                },
+                {
+                  model: User,
+                  as: 'receiver',
+                  attributes: ['id', 'username', 'avatar', 'publicKey']
+                },
+                {
+                  model: Message,
+                  as: 'replyTo',
+                  include: [
+                    {
+                      model: User,
+                      as: 'sender',
+                      attributes: ['id', 'username', 'avatar']
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              model: User,
+              as: 'participant1',
+              attributes: ['id', 'username', 'avatar', 'isOnline']
+            },
+            {
+              model: User,
+              as: 'participant2',
+              attributes: ['id', 'username', 'avatar', 'isOnline']
+            },
+            {
+              model: User,
+              as: 'participants',
+              attributes: ['id', 'username', 'avatar', 'isOnline'],
+              through: {
+                attributes: ['role', 'joinedAt']
+              }
+            }
+          ]
+        });
+      }
+
+      if (!completeChat) {
+        console.error(`Chat ${chatId} not found`);
+        return null;
+      }
+
+      // Prepare message preview for notification title/body
       let messagePreview = content;
       if (isEncrypted) {
         messagePreview = '🔒 Encrypted message';
@@ -90,7 +154,7 @@ class NotificationService {
         messagePreview = '🎥 Video';
       }
 
-      // Truncate long messages
+      // Truncate long messages for preview
       if (messagePreview && messagePreview.length > 100) {
         messagePreview = messagePreview.substring(0, 97) + '...';
       }
@@ -99,16 +163,35 @@ class NotificationService {
       const notification = await Notification.create({
         userId: receiverId,
         type: 'new_message',
-        title: sender.username,
-        body: messagePreview || 'New message',
+        title: completeChat.isGroup ? completeChat.name || 'Group Chat' : sender.username,
+        body: completeChat.isGroup ? `${sender.username}: ${messagePreview || 'New message'}` : (messagePreview || 'New message'),
         data: {
+          // ✅ COMPLETE CHAT DATA: Include the entire chat object with the specific format
+          chat: JSON.stringify(completeChat.toJSON()),
+          
+          // Legacy fields for backward compatibility
           messageId,
           senderId,
           senderName: sender.username,
           senderAvatar: sender.avatar,
           chatId,
           messageType,
-          action: 'open_chat'
+          messagePreview,
+          action: 'open_chat',
+          
+          // Enhanced chat information
+          chatType: completeChat.isGroup ? 'group' : 'direct',
+          chatName: completeChat.name || (completeChat.isGroup ? 'Group Chat' : sender.username),
+          chatAvatar: completeChat.avatar,
+          participants: JSON.stringify(completeChat.participants?.map(p => ({
+            id: p.id,
+            username: p.username,
+            avatar: p.avatar,
+            isOnline: p.isOnline,
+            role: p.ChatParticipant?.role,
+            joinedAt: p.ChatParticipant?.joinedAt
+          })) || []),
+          timestamp: new Date().toISOString()
         }
       });
 
@@ -126,7 +209,7 @@ class NotificationService {
         }
       );
 
-      console.log(`💬 Queued message notification for user ${receiverId}`);
+      console.log(`💬 Queued message notification with complete chat data for user ${receiverId}`);
       return notification;
     } catch (error) {
       console.error('Notify new message error:', error);
@@ -187,23 +270,72 @@ class NotificationService {
 
   /**
    * Notify group chat participants
+   * ✅ ENHANCED: Include complete chat data for group notifications
    */
   async notifyGroupMessage(messageData, participantIds) {
     try {
-      const { senderId } = messageData;
+      const { senderId, chatId } = messageData;
 
       // Filter out sender
       const recipients = participantIds.filter(id => id !== senderId);
 
-      // Create notifications for all participants
+      // ✅ FETCH COMPLETE CHAT DATA once for all participants
+      const completeChat = await Chat.findByPk(chatId, {
+        include: [
+          {
+            model: Message,
+            as: 'messages',
+            limit: 1, // Only get the latest message
+            order: [['createdAt', 'DESC']],
+            include: [
+              {
+                model: User,
+                as: 'sender',
+                attributes: ['id', 'username', 'avatar', 'publicKey']
+              },
+              {
+                model: Message,
+                as: 'replyTo',
+                include: [
+                  {
+                    model: User,
+                    as: 'sender',
+                    attributes: ['id', 'username', 'avatar']
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            model: User,
+            as: 'participants',
+            attributes: ['id', 'username', 'avatar', 'isOnline'],
+            through: {
+              attributes: ['role', 'joinedAt']
+            }
+          }
+        ]
+      });
+
+      if (!completeChat) {
+        console.error(`Group chat ${chatId} not found`);
+        return [];
+      }
+
+      // Create notifications for all participants with complete chat data
       const notifications = await Promise.all(
         recipients.map(recipientId =>
-          this.notifyNewMessage({ ...messageData, receiverId: recipientId })
+          this.notifyNewMessage({ 
+            ...messageData, 
+            receiverId: recipientId,
+            // Pass the complete chat data to avoid re-fetching
+            _completeChatData: completeChat
+          })
         )
       );
 
       const successCount = notifications.filter(n => n !== null).length;
-      console.log(`👥 Queued ${successCount}/${recipients.length} group message notifications`);
+      console.log(`👥 Queued ${successCount}/${recipients.length} group message notifications with complete chat data`);
       return notifications;
     } catch (error) {
       console.error('Notify group message error:', error);

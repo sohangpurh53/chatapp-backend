@@ -192,8 +192,38 @@ class FCMService {
           if (value !== null && value !== undefined) {
             // ✅ CRITICAL: Ensure ALL values are strings for FCM
             if (typeof value === 'string') {
-              // Handle large signal data with compression check
-              if (key === 'signalData' && value.length > 3000) {
+              // Handle large chat data with size check
+              if (key === 'chat' && value.length > 3000) {
+                console.warn(`⚠️  Chat data too large (${value.length} chars), truncating for FCM`);
+                try {
+                  const chatData = JSON.parse(value);
+                  // Create a minimal version with essential data only
+                  const minimalChat = {
+                    id: chatData.id,
+                    name: chatData.name,
+                    avatar: chatData.avatar,
+                    isGroup: chatData.isGroup,
+                    isActive: chatData.isActive,
+                    messages: chatData.messages ? chatData.messages.slice(0, 1) : [], // Only latest message
+                    settings: chatData.settings,
+                    createdAt: chatData.createdAt,
+                    updatedAt: chatData.updatedAt,
+                    participant1: chatData.participant1,
+                    participant2: chatData.participant2,
+                    participants: chatData.participants ? chatData.participants.slice(0, 10) : [], // Limit participants
+                    lastActivityAt: chatData.lastActivityAt,
+                    participant1Id: chatData.participant1Id,
+                    participant2Id: chatData.participant2Id
+                  };
+                  dataPayload[key] = JSON.stringify(minimalChat);
+                } catch (parseError) {
+                  console.error('Error parsing chat data for truncation:', parseError);
+                  dataPayload[key] = JSON.stringify({ 
+                    type: 'truncated', 
+                    message: 'Chat data too large for FCM, will be delivered via socket' 
+                  });
+                }
+              } else if (key === 'signalData' && value.length > 3000) {
                 console.warn(`⚠️  Signal data too large (${value.length} chars), truncating for FCM`);
                 dataPayload[key] = JSON.stringify({ 
                   type: 'truncated', 
