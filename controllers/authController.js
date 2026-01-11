@@ -10,6 +10,15 @@ const register = async (req, res) => {
   try {
     const { username, email, password, publicKey, encryptedPrivateKey, keySalt } = req.body;
 
+    console.log('📥 Registration request received:', {
+      username,
+      email,
+      hasPassword: !!password,
+      hasPublicKey: !!publicKey,
+      hasEncryptedPrivateKey: !!encryptedPrivateKey,
+      hasKeySalt: !!keySalt
+    });
+
     // Validate input
     if (!username || !email || !password) {
       return res.status(400).json({
