@@ -10,7 +10,8 @@ const {
   getUserPublicKey,
   getUserInfo,
   uploadKeys,
-  getEncryptedPrivateKey
+  getEncryptedPrivateKey,
+  updateKeys
 } = require('../controllers/authController');
 
 router.post('/register', register);
