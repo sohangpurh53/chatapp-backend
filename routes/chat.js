@@ -11,6 +11,8 @@ const {
   updateGroupInfo,
   markMessageAsRead,
   getGroupKey,
+  rotateGroupKey,
+  addMemberGroupKey,
   createGroupWithKeys
 } = require('../controllers/chatController');
 
