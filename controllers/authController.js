@@ -355,6 +355,38 @@ const updateProfile = async (req, res) => {
   }
 };
 
+// Update encryption keys
+const updateKeys = async (req, res) => {
+  try {
+    const { publicKey, encryptedPrivateKey, keySalt } = req.body;
+    const userId = req.user.id;
+    
+    if (!publicKey || !encryptedPrivateKey || !keySalt) {
+      return res.status(400).json({ error: 'Missing required key data' });
+    }
+    
+    const currentUser = await User.findByPk(userId);
+    const newVersion = (currentUser.keyVersion || 1) + 1;
+    
+    await User.update({
+      publicKey,
+      encryptedPrivateKey,
+      keySalt,
+      keyVersion: newVersion,
+      keyCreatedAt: new Date()
+    }, { where: { id: userId } });
+    
+    res.json({ 
+      success: true, 
+      message: 'Keys updated successfully',
+      keyVersion: newVersion
+    });
+  } catch (error) {
+    console.error('Update keys error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -364,5 +396,6 @@ module.exports = {
   getUserPublicKey,
   getUserInfo,
   uploadKeys,
-  getEncryptedPrivateKey
+  getEncryptedPrivateKey,
+  updateKeys
 };

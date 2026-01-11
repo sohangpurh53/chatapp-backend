@@ -24,5 +24,6 @@ router.get('/users/:userId', authenticateToken, getUserInfo);
 // Encryption key management endpoints
 router.post('/keys', authenticateToken, uploadKeys);
 router.get('/keys', authenticateToken, getEncryptedPrivateKey);
+router.put('/keys', authenticateToken, updateKeys);
 
 module.exports = router;

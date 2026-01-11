@@ -1096,6 +1096,109 @@ const clearChat = async (req, res) => {
   }
 };
 
+// Rotate group key (when member is removed or for security)
+const rotateGroupKey = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { encryptedGroupKeys } = req.body;
+    const userId = req.user.id;
+    
+    // Verify user is admin
+    const participant = await ChatParticipant.findOne({
+      where: {
+        userId,
+        chatId,
+        isActive: true,
+        role: { [Op.in]: ['admin', 'moderator'] }
+      }
+    });
+    
+    if (!participant) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+    
+    // Get current key version
+    const { GroupChatKey } = require('../models');
+    const currentKey = await GroupChatKey.findOne({
+      where: { chatId },
+      order: [['keyVersion', 'DESC']]
+    });
+    
+    const newVersion = (currentKey?.keyVersion || 1) + 1;
+    
+    // Delete old keys
+    await GroupChatKey.destroy({ where: { chatId } });
+    
+    // Store new encrypted group keys
+    for (const keyData of encryptedGroupKeys) {
+      await GroupChatKey.create({
+        chatId,
+        userId: keyData.userId,
+        encryptedGroupKey: keyData.encryptedKey,
+        keyVersion: newVersion
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Group key rotated successfully',
+      keyVersion: newVersion
+    });
+  } catch (error) {
+    console.error('Rotate group key error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Add member group key (when new member joins)
+const addMemberGroupKey = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { userId: newMemberId, encryptedGroupKey } = req.body;
+    const userId = req.user.id;
+    
+    // Verify user is admin
+    const participant = await ChatParticipant.findOne({
+      where: {
+        userId,
+        chatId,
+        isActive: true,
+        role: { [Op.in]: ['admin', 'moderator'] }
+      }
+    });
+    
+    if (!participant) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+    
+    // Get current key version
+    const { GroupChatKey } = require('../models');
+    const currentKey = await GroupChatKey.findOne({
+      where: { chatId },
+      order: [['keyVersion', 'DESC']]
+    });
+    
+    const keyVersion = currentKey?.keyVersion || 1;
+    
+    // Store encrypted group key for new member
+    await GroupChatKey.create({
+      chatId,
+      userId: newMemberId,
+      encryptedGroupKey,
+      keyVersion
+    });
+    
+    res.json({ 
+      success: true, 
+      message: 'Group key added for new member',
+      keyVersion
+    });
+  } catch (error) {
+    console.error('Add member group key error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   createChat,
   getUserChats,
@@ -1107,6 +1210,8 @@ module.exports = {
   markMessageAsRead,
   getGroupKey,
   createGroupWithKeys,
+  rotateGroupKey,
+  addMemberGroupKey,
   deleteMessage,
   bulkDeleteMessages,
   deleteChat,

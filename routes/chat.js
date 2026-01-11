@@ -37,6 +37,8 @@ router.delete('/:chatId/clear', authenticateToken, require('../controllers/chatC
 // Encryption key management routes
 router.get('/:chatId/group-key', authenticateToken, getGroupKey);
 router.post('/create-group-with-keys', authenticateToken, createGroupWithKeys);
+router.post('/:chatId/rotate-group-key', authenticateToken, rotateGroupKey);
+router.post('/:chatId/add-member-key', authenticateToken, addMemberGroupKey);
 
 // Delete operations
 router.delete('/messages/:messageId', authenticateToken, require('../controllers/chatController').deleteMessage);
