@@ -166,10 +166,7 @@ class NotificationService {
         title: completeChat.isGroup ? completeChat.name || 'Group Chat' : sender.username,
         body: completeChat.isGroup ? `${sender.username}: ${messagePreview || 'New message'}` : (messagePreview || 'New message'),
         data: {
-          // ✅ COMPLETE CHAT DATA: Include the entire chat object with the specific format
-          chat: JSON.stringify(completeChat.toJSON()),
-          
-          // Legacy fields for backward compatibility
+          // ✅ LIGHTWEIGHT FCM DATA: Only essential info for FCM (under 4KB limit)
           messageId,
           senderId,
           senderName: sender.username,
@@ -179,19 +176,15 @@ class NotificationService {
           messagePreview,
           action: 'open_chat',
           
-          // Enhanced chat information
+          // Essential chat information only
           chatType: completeChat.isGroup ? 'group' : 'direct',
           chatName: completeChat.name || (completeChat.isGroup ? 'Group Chat' : sender.username),
           chatAvatar: completeChat.avatar,
-          participants: JSON.stringify(completeChat.participants?.map(p => ({
-            id: p.id,
-            username: p.username,
-            avatar: p.avatar,
-            isOnline: p.isOnline,
-            role: p.ChatParticipant?.role,
-            joinedAt: p.ChatParticipant?.joinedAt
-          })) || []),
-          timestamp: new Date().toISOString()
+          isGroup: completeChat.isGroup ? 'true' : 'false',
+          timestamp: new Date().toISOString(),
+          
+          // ✅ SIGNAL: Client should fetch full chat data via API/socket
+          needsFullChatData: 'true'
         }
       });
 

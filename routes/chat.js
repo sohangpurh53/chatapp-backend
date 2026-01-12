@@ -21,6 +21,9 @@ router.get('/my-chats', authenticateToken, getUserChats);
 router.get('/:chatId/messages', authenticateToken, getChatMessages);
 router.get('/search/users', authenticateToken, searchUsers);
 
+// ✅ NEW: Fetch full chat data for notifications
+router.get('/:chatId/full-data', authenticateToken, require('../controllers/chatController').getFullChatData);
+
 // Group management routes
 router.post('/:chatId/invite', authenticateToken, inviteToGroup);
 router.post('/invites/:inviteId/respond', authenticateToken, respondToGroupInvite);

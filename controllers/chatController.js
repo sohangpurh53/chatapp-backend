@@ -1199,6 +1199,92 @@ const addMemberGroupKey = async (req, res) => {
   }
 };
 
+/**
+ * ✅ NEW: Get full chat data for notifications
+ * This endpoint provides complete chat data when client receives FCM notification
+ */
+const getFullChatData = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.user.id;
+
+    // Fetch complete chat data with all associations
+    const chat = await Chat.findByPk(chatId, {
+      include: [
+        {
+          model: Message,
+          as: 'messages',
+          limit: 20, // Get recent messages
+          order: [['createdAt', 'DESC']],
+          include: [
+            {
+              model: User,
+              as: 'sender',
+              attributes: ['id', 'username', 'avatar', 'publicKey']
+            },
+            {
+              model: User,
+              as: 'receiver',
+              attributes: ['id', 'username', 'avatar', 'publicKey']
+            },
+            {
+              model: Message,
+              as: 'replyTo',
+              include: [
+                {
+                  model: User,
+                  as: 'sender',
+                  attributes: ['id', 'username', 'avatar']
+                }
+              ]
+            }
+          ]
+        },
+        {
+          model: User,
+          as: 'participant1',
+          attributes: ['id', 'username', 'avatar', 'isOnline']
+        },
+        {
+          model: User,
+          as: 'participant2',
+          attributes: ['id', 'username', 'avatar', 'isOnline']
+        },
+        {
+          model: User,
+          as: 'participants',
+          attributes: ['id', 'username', 'avatar', 'isOnline'],
+          through: {
+            attributes: ['role', 'joinedAt']
+          }
+        }
+      ]
+    });
+
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    // Check if user has access to this chat
+    const hasAccess = chat.isGroup 
+      ? chat.participants?.some(p => p.id === userId)
+      : (chat.participant1Id === userId || chat.participant2Id === userId);
+
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    res.json({ 
+      success: true,
+      chat: chat.toJSON()
+    });
+
+  } catch (error) {
+    console.error('Get full chat data error:', error);
+    res.status(500).json({ error: 'Failed to fetch chat data' });
+  }
+};
+
 module.exports = {
   createChat,
   getUserChats,
@@ -1218,5 +1304,6 @@ module.exports = {
   leaveGroup,
   updateChatSettings,
   getChatSettings,
-  clearChat
+  clearChat,
+  getFullChatData
 };
