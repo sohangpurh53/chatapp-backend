@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
-const { User } = require('../models');
+const { User, EncryptionSession } = require('../models');
 const { Op } = require('sequelize');
+const encryptionService = require('../services/encryptionService');
 
 const generateToken = (userId) => {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
@@ -46,18 +47,40 @@ const register = async (req, res) => {
     }
 
     // Create new user with encryption keys
-    const user = await User.create({
+    const userData = {
       username,
       email,
       password,
-      publicKey,
-      encryptedPrivateKey,
-      keySalt,
       keyVersion: 1,
       keyCreatedAt: new Date()
-    });
+    };
+
+    // Add encryption keys if provided
+    if (publicKey && encryptedPrivateKey && keySalt) {
+      userData.publicKey = publicKey;
+      userData.encryptedPrivateKey = encryptedPrivateKey;
+      userData.keySalt = keySalt;
+      userData.encryptionEnabled = true;
+      
+      console.log('🔐 User registered with encryption keys');
+    }
+
+    const user = await User.create(userData);
 
     const token = generateToken(user.id);
+
+    // Create encryption session if keys were provided
+    let encryptionSession = null;
+    if (user.encryptionEnabled) {
+      try {
+        encryptionSession = await encryptionService.createEncryptionSession(
+          user.id,
+          { userAgent: req.headers['user-agent'], ip: req.ip }
+        );
+      } catch (sessionError) {
+        console.warn('Failed to create encryption session:', sessionError);
+      }
+    }
 
     res.status(201).json({
       message: 'User registered successfully',
@@ -68,8 +91,10 @@ const register = async (req, res) => {
         email: user.email,
         avatar: user.avatar,
         isOnline: user.isOnline,
-        publicKey: user.publicKey
-      }
+        publicKey: user.publicKey,
+        encryptionEnabled: user.encryptionEnabled
+      },
+      encryptionSession
     });
   } catch (error) {
     console.error('Registration error:', error);
@@ -108,6 +133,19 @@ const login = async (req, res) => {
 
     const token = generateToken(user.id);
 
+    // Create encryption session if user has encryption enabled
+    let encryptionSession = null;
+    if (user.encryptionEnabled) {
+      try {
+        encryptionSession = await encryptionService.createEncryptionSession(
+          user.id,
+          { userAgent: req.headers['user-agent'], ip: req.ip }
+        );
+      } catch (sessionError) {
+        console.warn('Failed to create encryption session:', sessionError);
+      }
+    }
+
     res.json({
       message: 'Login successful',
       token,
@@ -117,8 +155,10 @@ const login = async (req, res) => {
         email: user.email,
         avatar: user.avatar,
         isOnline: user.isOnline,
-        publicKey: user.publicKey
-      }
+        publicKey: user.publicKey,
+        encryptionEnabled: user.encryptionEnabled
+      },
+      encryptionSession
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -133,6 +173,12 @@ const logout = async (req, res) => {
       lastSeen: new Date()
     });
 
+    // Deactivate all encryption sessions for this user
+    await EncryptionSession.update(
+      { isActive: false },
+      { where: { userId: req.user.id, isActive: true } }
+    );
+
     res.json({ message: 'Logout successful' });
   } catch (error) {
     console.error('Logout error:', error);
@@ -143,7 +189,7 @@ const logout = async (req, res) => {
 const getProfile = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey']
+      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey', 'encryptionEnabled']
     });
 
     res.json({ user });
@@ -159,11 +205,15 @@ const getUserPublicKey = async (req, res) => {
     const { userId } = req.params;
     
     const user = await User.findByPk(userId, {
-      attributes: ['id', 'username', 'publicKey']
+      attributes: ['id', 'username', 'publicKey', 'encryptionEnabled']
     });
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.encryptionEnabled || !user.publicKey) {
+      return res.status(404).json({ error: 'User does not have encryption enabled' });
     }
 
     res.json({
@@ -177,7 +227,7 @@ const getUserPublicKey = async (req, res) => {
   }
 };
 
-// Upload/update encryption keys
+// Enhanced upload/update encryption keys with validation
 const uploadKeys = async (req, res) => {
   try {
     const { publicKey, encryptedPrivateKey, keySalt } = req.body;
@@ -186,17 +236,40 @@ const uploadKeys = async (req, res) => {
     if (!publicKey || !encryptedPrivateKey || !keySalt) {
       return res.status(400).json({ error: 'Missing required key data' });
     }
+
+    // Validate key format (basic validation)
+    if (publicKey.length < 100 || encryptedPrivateKey.length < 100) {
+      return res.status(400).json({ error: 'Invalid key format' });
+    }
     
-    await User.update({
-      publicKey,
-      encryptedPrivateKey,
-      keySalt,
-      keyCreatedAt: new Date()
-    }, { where: { id: userId } });
+    const currentUser = await User.findByPk(userId);
+    const isFirstTimeSetup = !currentUser.encryptionEnabled;
+    
+    if (isFirstTimeSetup) {
+      // First time setup
+      await currentUser.update({
+        publicKey,
+        encryptedPrivateKey,
+        keySalt,
+        keyCreatedAt: new Date(),
+        encryptionEnabled: true
+      });
+    } else {
+      // Key rotation
+      await currentUser.rotateKeys(publicKey, encryptedPrivateKey, keySalt);
+    }
+
+    // Create new encryption session
+    const encryptionSession = await encryptionService.createEncryptionSession(
+      userId,
+      { userAgent: req.headers['user-agent'], ip: req.ip }
+    );
     
     res.json({ 
       success: true, 
-      message: 'Keys uploaded successfully' 
+      message: isFirstTimeSetup ? 'Keys uploaded successfully' : 'Keys rotated successfully',
+      keyVersion: currentUser.keyVersion,
+      encryptionSession
     });
   } catch (error) {
     console.error('Upload keys error:', error);
@@ -204,16 +277,16 @@ const uploadKeys = async (req, res) => {
   }
 };
 
-// Get encrypted private key
+// Enhanced get encrypted private key with session validation
 const getEncryptedPrivateKey = async (req, res) => {
   try {
     const userId = req.user.id;
     const user = await User.findByPk(userId, {
-      attributes: ['encryptedPrivateKey', 'keySalt', 'keyVersion']
+      attributes: ['encryptedPrivateKey', 'keySalt', 'keyVersion', 'encryptionEnabled']
     });
     
-    if (!user || !user.encryptedPrivateKey) {
-      return res.status(404).json({ error: 'Keys not found' });
+    if (!user || !user.encryptionEnabled || !user.encryptedPrivateKey) {
+      return res.status(404).json({ error: 'Encryption keys not found' });
     }
     
     res.json({
@@ -336,7 +409,7 @@ const updateProfile = async (req, res) => {
 
     // Get updated user data
     const updatedUser = await User.findByPk(userId, {
-      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey']
+      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey', 'encryptionEnabled']
     });
 
     res.json({
@@ -347,7 +420,8 @@ const updateProfile = async (req, res) => {
         email: updatedUser.email,
         avatar: updatedUser.avatar,
         isOnline: updatedUser.isOnline,
-        publicKey: updatedUser.publicKey
+        publicKey: updatedUser.publicKey,
+        encryptionEnabled: updatedUser.encryptionEnabled
       }
     });
   } catch (error) {
@@ -364,7 +438,7 @@ const updateProfile = async (req, res) => {
   }
 };
 
-// Update encryption keys
+// Enhanced update keys with proper rotation tracking
 const updateKeys = async (req, res) => {
   try {
     const { publicKey, encryptedPrivateKey, keySalt } = req.body;
@@ -375,23 +449,61 @@ const updateKeys = async (req, res) => {
     }
     
     const currentUser = await User.findByPk(userId);
-    const newVersion = (currentUser.keyVersion || 1) + 1;
     
-    await User.update({
-      publicKey,
-      encryptedPrivateKey,
-      keySalt,
-      keyVersion: newVersion,
-      keyCreatedAt: new Date()
-    }, { where: { id: userId } });
+    // Use the rotateKeys method for proper tracking
+    await currentUser.rotateKeys(publicKey, encryptedPrivateKey, keySalt);
+    
+    // Create new encryption session
+    const encryptionSession = await encryptionService.createEncryptionSession(
+      userId,
+      { userAgent: req.headers['user-agent'], ip: req.ip }
+    );
     
     res.json({ 
       success: true, 
       message: 'Keys updated successfully',
-      keyVersion: newVersion
+      keyVersion: currentUser.keyVersion + 1,
+      encryptionSession
     });
   } catch (error) {
     console.error('Update keys error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// NEW: Validate encryption session
+const validateEncryptionSession = async (req, res) => {
+  try {
+    const { sessionToken } = req.body;
+    
+    if (!sessionToken) {
+      return res.status(400).json({ error: 'Session token is required' });
+    }
+    
+    const validation = await encryptionService.validateEncryptionSession(sessionToken);
+    
+    if (!validation.valid) {
+      return res.status(401).json({ error: validation.error });
+    }
+    
+    res.json({
+      valid: true,
+      userId: validation.userId,
+      keyVersion: validation.keyVersion
+    });
+  } catch (error) {
+    console.error('Validate encryption session error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// NEW: Get encryption statistics (admin only)
+const getEncryptionStats = async (req, res) => {
+  try {
+    const stats = await encryptionService.getEncryptionStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Get encryption stats error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -406,5 +518,7 @@ module.exports = {
   getUserInfo,
   uploadKeys,
   getEncryptedPrivateKey,
-  updateKeys
+  updateKeys,
+  validateEncryptionSession,
+  getEncryptionStats
 };

@@ -227,8 +227,18 @@ class SocketHandlers {
         replyToId,
         encryptedContent,
         isEncrypted = false,
-        keyId 
+        keyId,
+        encryptionMetadata
       } = data;
+
+      console.log('📨 Handling message send:', {
+        chatId,
+        messageType,
+        isEncrypted,
+        hasContent: !!content,
+        hasEncryptedContent: !!encryptedContent,
+        keyId: keyId ? keyId.substring(0, 20) + '...' : null
+      });
 
       // Verify user is participant
       const participant = await ChatParticipant.findOne({
@@ -257,29 +267,66 @@ class SocketHandlers {
         receiverId = chat.participant1Id === socket.userId ? chat.participant2Id : chat.participant1Id;
       }
 
-      // Enhanced encryption support
+      // Enhanced encryption support with validation
+      let processedEncryptedContent = null;
       let encryptionIv = null;
       let authTag = null;
       let encryptionAlgorithm = null;
       let encryptionVersion = null;
 
       if (isEncrypted && encryptedContent) {
+        // Validate encrypted message format
+        const encryptionService = require('../services/encryptionService');
+        const validation = encryptionService.validateEncryptedMessage(encryptedContent);
+        
+        if (!validation.valid) {
+          console.error('❌ Invalid encrypted message format:', validation.error);
+          socket.emit('error', { message: `Invalid encryption format: ${validation.error}` });
+          return;
+        }
+
+        // Handle large encrypted content with compression
+        const compressionResult = await encryptionService.compressEncryptedContent(
+          typeof encryptedContent === 'string' ? encryptedContent : JSON.stringify(encryptedContent)
+        );
+
+        processedEncryptedContent = compressionResult.content;
         encryptionIv = encryptedContent.iv;
         authTag = encryptedContent.authTag;
-        encryptionAlgorithm = encryptedContent.algorithm;
-        encryptionVersion = encryptedContent.version;
+        encryptionAlgorithm = encryptedContent.algorithm || 'AES-256-GCM';
+        encryptionVersion = encryptedContent.version || 1;
+
+        // Store compression metadata
+        if (compressionResult.compressed) {
+          encryptionMetadata = {
+            ...encryptionMetadata,
+            compressed: true,
+            originalSize: compressionResult.originalSize,
+            compressedSize: compressionResult.compressedSize,
+            compressionRatio: compressionResult.compressionRatio
+          };
+        }
+
+        console.log('🔐 Processed encrypted content:', {
+          algorithm: encryptionAlgorithm,
+          version: encryptionVersion,
+          compressed: compressionResult.compressed,
+          originalSize: compressionResult.originalSize,
+          finalSize: processedEncryptedContent.length
+        });
       }
 
       // Create message with enhanced encryption support
-      const message = await Message.create({
+      const messageData = {
         content: isEncrypted ? '[ENCRYPTED]' : content,
-        encryptedContent: isEncrypted ? encryptedContent.encryptedContent : null,
+        encryptedContent: processedEncryptedContent,
         isEncrypted,
         keyId: isEncrypted ? keyId : null,
         encryptionIv,
         authTag,
         encryptionAlgorithm,
         encryptionVersion,
+        encryptionMetadata,
         messageType,
         fileUrl,
         fileName,
@@ -289,7 +336,9 @@ class SocketHandlers {
         chatId,
         replyToId,
         status: 'sent'
-      });
+      };
+
+      const message = await Message.create(messageData);
 
       // Fetch complete message data with sender's public key
       const completeMessage = await Message.findByPk(message.id, {
@@ -297,13 +346,13 @@ class SocketHandlers {
           {
             model: User,
             as: 'sender',
-            attributes: ['id', 'username', 'avatar', 'publicKey'],
-            required: true // ✅ Ensure sender is always included
+            attributes: ['id', 'username', 'avatar', 'publicKey', 'encryptionEnabled'],
+            required: true
           },
           {
             model: User,
             as: 'receiver',
-            attributes: ['id', 'username', 'avatar', 'publicKey'],
+            attributes: ['id', 'username', 'avatar', 'publicKey', 'encryptionEnabled'],
             required: false
           },
           {
@@ -326,33 +375,15 @@ class SocketHandlers {
             'encryptionIv',
             'authTag',
             'encryptionAlgorithm',
-            'encryptionVersion'
+            'encryptionVersion',
+            'encryptionMetadata'
           ] 
         }
       });
 
-      // ✅ Add validation for completeMessage
-      if (!completeMessage) {
+      if (!completeMessage || !completeMessage.sender) {
         console.error(`❌ Failed to fetch complete message data for message ${message.id}`);
         socket.emit('error', { message: 'Failed to fetch message data' });
-        return;
-      }
-
-      // ✅ Debug complete message structure
-      console.log('📋 Complete message structure:', {
-        id: completeMessage.id,
-        senderId: completeMessage.senderId,
-        hasSender: !!completeMessage.sender,
-        senderData: completeMessage.sender ? {
-          id: completeMessage.sender.id,
-          username: completeMessage.sender.username
-        } : null
-      });
-
-      if (!completeMessage.sender) {
-        console.error(`❌ Missing sender data for message ${message.id}, senderId: ${socket.userId}`);
-        console.error('❌ Complete message data:', JSON.stringify(completeMessage, null, 2));
-        socket.emit('error', { message: 'Failed to fetch sender data' });
         return;
       }
 
@@ -379,30 +410,32 @@ class SocketHandlers {
         });
       }
 
-      // ✅ SIMPLIFIED: Direct socket delivery only
+      // Emit message to all participants
       this.io.to(`chat_${chatId}`).emit('new_message', completeMessage);
-      console.log("📡 Message emitted directly to chat", {
-      chatId,
-      message: completeMessage.toJSON(),
-    });
-
+      
+      console.log("📡 Message emitted to chat", {
+        chatId,
+        messageId: message.id,
+        isEncrypted: message.isEncrypted,
+        participantCount: participants.length
+      });
 
       // Immediate acknowledgment to sender
       socket.emit('message_sent', {
         messageId: message.id,
         status: 'sent',
-        timestamp: new Date()
+        timestamp: new Date(),
+        isEncrypted: message.isEncrypted
       });
 
-      // ✅ Send FCM only to offline participants using notification service
+      // Send FCM notifications to offline participants
       const notificationService = require('../services/notificationService');
       for (const participant of participants) {
         const isOnline = await redisService.getUserOnlineStatus(participant.userId);
         
         if (!isOnline) {
-          console.log(`📱 Sending FCM to offline user ${participant.userId} via notification service`);
+          console.log(`📱 Sending FCM to offline user ${participant.userId}`);
           try {
-            // ✅ Use notification service to send complete chat data
             await notificationService.notifyNewMessage({
               messageId: message.id,
               senderId: socket.userId,
@@ -413,14 +446,31 @@ class SocketHandlers {
               messageType: message.messageType
             });
           } catch (fcmError) {
-            console.error(`❌ Notification service failed for user ${participant.userId}:`, "fcmfullerror:", fcmError, fcmError.message);
+            console.error(`❌ FCM notification failed for user ${participant.userId}:`, fcmError.message);
           }
         }
       }
 
     } catch (error) {
       console.error('Send message error:', error);
-      socket.emit('error', { message: 'Failed to send message' });
+      
+      // Enhanced error reporting for encryption issues
+      if (error.message.includes('too long for type')) {
+        socket.emit('error', { 
+          message: 'Message content too large. Please try a shorter message or enable compression.',
+          code: 'MESSAGE_TOO_LARGE'
+        });
+      } else if (error.message.includes('encryption')) {
+        socket.emit('error', { 
+          message: 'Encryption error. Please check your encryption settings.',
+          code: 'ENCRYPTION_ERROR'
+        });
+      } else {
+        socket.emit('error', { 
+          message: 'Failed to send message',
+          code: 'SEND_FAILED'
+        });
+      }
     }
   }
 

@@ -37,13 +37,13 @@ const User = sequelize.define('User', {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW
   },
-  // Encryption fields
+  // Enhanced encryption fields
   encryptedPrivateKey: {
-    type: DataTypes.TEXT,
+    type: DataTypes.TEXT, // Changed from TEXT to handle larger keys
     allowNull: true
   },
   publicKey: {
-    type: DataTypes.TEXT,
+    type: DataTypes.TEXT, // Changed from TEXT to handle larger keys
     allowNull: true
   },
   keySalt: {
@@ -57,6 +57,23 @@ const User = sequelize.define('User', {
   keyCreatedAt: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  // Key rotation history for audit purposes
+  keyRotationHistory: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    comment: 'History of key rotations with timestamps'
+  },
+  // Enhanced security fields
+  encryptionEnabled: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Whether user has encryption enabled'
+  },
+  keyDerivationRounds: {
+    type: DataTypes.INTEGER,
+    defaultValue: 100000,
+    comment: 'PBKDF2 rounds for key derivation'
   },
   // FCM Push Notification fields
   fcmToken: {
@@ -83,17 +100,53 @@ const User = sequelize.define('User', {
       if (user.password) {
         user.password = await bcrypt.hash(user.password, 10);
       }
+      // Set encryptionEnabled if keys are provided
+      if (user.publicKey && user.encryptedPrivateKey) {
+        user.encryptionEnabled = true;
+      }
     },
     beforeUpdate: async (user) => {
       if (user.changed('password')) {
         user.password = await bcrypt.hash(user.password, 10);
       }
+      // Update encryptionEnabled status
+      if (user.changed('publicKey') || user.changed('encryptedPrivateKey')) {
+        user.encryptionEnabled = !!(user.publicKey && user.encryptedPrivateKey);
+      }
     }
-  }
+  },
+  indexes: [
+    {
+      fields: ['publicKey'] // New index for public key lookups
+    },
+    {
+      fields: ['encryptionEnabled'] // New index for encryption status
+    }
+  ]
 });
 
 User.prototype.validatePassword = async function(password) {
   return await bcrypt.compare(password, this.password);
+};
+
+// Add method to track key rotation
+User.prototype.rotateKeys = async function(newPublicKey, newEncryptedPrivateKey, newKeySalt) {
+  const history = this.keyRotationHistory || [];
+  history.push({
+    oldKeyVersion: this.keyVersion,
+    rotatedAt: new Date(),
+    reason: 'manual_rotation'
+  });
+
+  await this.update({
+    publicKey: newPublicKey,
+    encryptedPrivateKey: newEncryptedPrivateKey,
+    keySalt: newKeySalt,
+    keyVersion: (this.keyVersion || 1) + 1,
+    keyCreatedAt: new Date(),
+    keyRotationHistory: history,
+    encryptionEnabled: true
+  });
 };
 
 module.exports = User;

@@ -11,7 +11,9 @@ const {
   getUserInfo,
   uploadKeys,
   getEncryptedPrivateKey,
-  updateKeys
+  updateKeys,
+  validateEncryptionSession,
+  getEncryptionStats
 } = require('../controllers/authController');
 
 router.post('/register', register);
@@ -22,9 +24,13 @@ router.put('/profile', authenticateToken, updateProfile);
 router.get('/users/:userId/public-key', authenticateToken, getUserPublicKey);
 router.get('/users/:userId', authenticateToken, getUserInfo);
 
-// Encryption key management endpoints
+// Enhanced encryption key management endpoints
 router.post('/keys', authenticateToken, uploadKeys);
 router.get('/keys', authenticateToken, getEncryptedPrivateKey);
 router.put('/keys', authenticateToken, updateKeys);
+
+// Encryption session management
+router.post('/encryption/validate-session', authenticateToken, validateEncryptionSession);
+router.get('/encryption/stats', authenticateToken, getEncryptionStats);
 
 module.exports = router;

@@ -8,12 +8,12 @@ const Message = sequelize.define('Message', {
     primaryKey: true
   },
   content: {
-    type: DataTypes.TEXT,
+    type: DataTypes.TEXT, // Changed from STRING to TEXT to handle larger content
     allowNull: true
   },
-  // Encrypted content fields for end-to-end encryption
+  // Enhanced encrypted content fields for end-to-end encryption
   encryptedContent: {
-    type: DataTypes.JSON,
+    type: DataTypes.TEXT, // Changed from JSON to TEXT for larger encrypted payloads
     allowNull: true,
     defaultValue: null
   },
@@ -41,6 +41,12 @@ const Message = sequelize.define('Message', {
   encryptionVersion: {
     type: DataTypes.INTEGER,
     defaultValue: 1
+  },
+  // Additional encryption metadata
+  encryptionMetadata: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    comment: 'Additional encryption metadata (compression, chunking, etc.)'
   },
   messageType: {
     type: DataTypes.ENUM('text', 'image', 'file', 'audio', 'video', 'system'),
@@ -158,6 +164,12 @@ const Message = sequelize.define('Message', {
     },
     {
       fields: ['replyToId']
+    },
+    {
+      fields: ['isEncrypted', 'chatId'] // New index for encrypted messages
+    },
+    {
+      fields: ['keyId'] // New index for key-based queries
     }
   ]
 });
