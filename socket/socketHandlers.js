@@ -293,7 +293,8 @@ class SocketHandlers {
         processedEncryptedContent = compressionResult.content;
         encryptionIv = encryptedContent.iv;
         authTag = encryptedContent.authTag;
-        encryptionAlgorithm = encryptedContent.algorithm || 'AES-256-GCM';
+        // Use the normalized algorithm from validation (handles case variations)
+        encryptionAlgorithm = encryptedContent.algorithm || 'AES-256-CBC';
         encryptionVersion = encryptedContent.version || 1;
 
         // Store compression metadata

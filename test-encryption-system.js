@@ -10,11 +10,19 @@ async function testEncryptionSystem() {
     const validEncryptedData = {
       encryptedContent: 'base64encodedcontent',
       iv: '12345678901234567890123456789012', // 32 hex chars = 16 bytes
-      algorithm: 'AES-256-GCM'
+      algorithm: 'aes-256-cbc' // Test with lowercase (should be normalized)
     };
     
     const validation = encryptionService.validateEncryptedMessage(validEncryptedData);
     console.log('✅ Validation result:', validation);
+
+    // Test algorithm normalization
+    console.log('\n🧪 Testing algorithm normalization...');
+    const testAlgorithms = ['aes-256-cbc', 'AES-256-CBC', 'aes-256-gcm', 'AES-256-GCM'];
+    testAlgorithms.forEach(alg => {
+      const normalized = encryptionService.normalizeAlgorithm(alg);
+      console.log(`${alg} -> ${normalized}`);
+    });
 
     // Test 2: Test compression
     console.log('\n2️⃣ Testing content compression...');

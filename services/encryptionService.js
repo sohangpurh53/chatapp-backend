@@ -16,6 +16,25 @@ const { Op } = require('sequelize');
 class EncryptionService {
   
   /**
+   * Normalize algorithm format to handle case variations
+   * @param {string} algorithm - Algorithm string
+   * @returns {string} Normalized algorithm
+   */
+  normalizeAlgorithm(algorithm) {
+    if (!algorithm) return null;
+    
+    const normalized = algorithm.toLowerCase();
+    const algorithmMap = {
+      'aes-256-gcm': 'AES-256-GCM',
+      'aes-256-cbc': 'AES-256-CBC',
+      'aes256gcm': 'AES-256-GCM',
+      'aes256cbc': 'AES-256-CBC'
+    };
+    
+    return algorithmMap[normalized] || algorithm;
+  }
+
+  /**
    * Validate encrypted message format
    * @param {Object} encryptedData - Encrypted message data
    * @returns {Object} Validation result
@@ -32,14 +51,19 @@ class EncryptionService {
         };
       }
 
-      // Validate algorithm
+      // Normalize and validate algorithm
+      const normalizedAlgorithm = this.normalizeAlgorithm(encryptedData.algorithm);
       const supportedAlgorithms = ['AES-256-GCM', 'AES-256-CBC'];
-      if (!supportedAlgorithms.includes(encryptedData.algorithm)) {
+      
+      if (!supportedAlgorithms.includes(normalizedAlgorithm)) {
         return {
           valid: false,
-          error: `Unsupported encryption algorithm: ${encryptedData.algorithm}`
+          error: `Unsupported encryption algorithm: ${encryptedData.algorithm}. Supported: AES-256-GCM, AES-256-CBC (case insensitive)`
         };
       }
+
+      // Update the algorithm to normalized format
+      encryptedData.algorithm = normalizedAlgorithm;
 
       // Validate IV length
       if (encryptedData.iv.length !== 32 && encryptedData.iv.length !== 24) { // Support both 16 bytes (32 hex) and 12 bytes (24 hex) for GCM
