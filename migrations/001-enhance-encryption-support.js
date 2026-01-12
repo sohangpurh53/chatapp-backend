@@ -14,6 +14,12 @@ module.exports = {
       allowNull: true
     });
 
+    // Fix keyId field to handle large RSA public keys
+    await queryInterface.changeColumn('Messages', 'keyId', {
+      type: Sequelize.TEXT,
+      allowNull: true
+    });
+
     // Add encryption metadata fields if they don't exist
     try {
       await queryInterface.addColumn('Messages', 'encryptionMetadata', {

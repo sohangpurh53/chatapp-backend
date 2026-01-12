@@ -22,7 +22,7 @@ const Message = sequelize.define('Message', {
     defaultValue: false
   },
   keyId: {
-    type: DataTypes.STRING,
+    type: DataTypes.TEXT, // Changed from STRING to TEXT for large RSA public keys
     allowNull: true // User ID of the sender for key identification
   },
   // Enhanced encryption fields
