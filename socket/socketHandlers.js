@@ -410,8 +410,23 @@ class SocketHandlers {
         });
       }
 
+      // Process encrypted content before emitting
+      const messageToEmit = completeMessage.toJSON();
+      if (messageToEmit.isEncrypted && messageToEmit.encryptedContent) {
+        try {
+          const encryptionService = require('../services/encryptionService');
+          messageToEmit.encryptedContent = await encryptionService.processEncryptedContentForClient(
+            messageToEmit.encryptedContent,
+            messageToEmit.encryptionMetadata
+          );
+        } catch (error) {
+          console.error('Failed to process encrypted content for broadcast:', error);
+          // Keep original content if processing fails
+        }
+      }
+
       // Emit message to all participants
-      this.io.to(`chat_${chatId}`).emit('new_message', completeMessage);
+      this.io.to(`chat_${chatId}`).emit('new_message', messageToEmit);
       
       console.log("📡 Message emitted to chat", {
         chatId,

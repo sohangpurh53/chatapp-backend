@@ -284,7 +284,27 @@ const getChatMessages = async (req, res) => {
       offset: parseInt(offset)
     });
 
-    res.json({ messages: messages.reverse() });
+    // Process encrypted content for each message
+    const encryptionService = require('../services/encryptionService');
+    const processedMessages = await Promise.all(messages.map(async (message) => {
+      const messageData = message.toJSON();
+      
+      if (messageData.isEncrypted && messageData.encryptedContent) {
+        try {
+          messageData.encryptedContent = await encryptionService.processEncryptedContentForClient(
+            messageData.encryptedContent,
+            messageData.encryptionMetadata
+          );
+        } catch (error) {
+          console.error('Failed to process encrypted content for message:', messageData.id, error);
+          // Keep original content if processing fails
+        }
+      }
+      
+      return messageData;
+    }));
+
+    res.json({ messages: processedMessages.reverse() });
   } catch (error) {
     console.error('Get chat messages error:', error);
     res.status(500).json({ error: 'Internal server error' });

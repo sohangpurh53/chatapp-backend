@@ -123,7 +123,22 @@ async function processMessageDelivery(job) {
         if (socketId) {
           console.log(`📡 Attempting Socket.IO delivery to user ${recipientId}`);
 
-          const delivered = await emitWithAck(socketId, 'new_message', message);
+          // Process encrypted content before emitting
+          const messageToEmit = message.toJSON();
+          if (messageToEmit.isEncrypted && messageToEmit.encryptedContent) {
+            try {
+              const encryptionService = require('../services/encryptionService');
+              messageToEmit.encryptedContent = await encryptionService.processEncryptedContentForClient(
+                messageToEmit.encryptedContent,
+                messageToEmit.encryptionMetadata
+              );
+            } catch (error) {
+              console.error('Failed to process encrypted content for worker delivery:', error);
+              // Keep original content if processing fails
+            }
+          }
+
+          const delivered = await emitWithAck(socketId, 'new_message', messageToEmit);
 
           if (delivered) {
             // Success! Mark as delivered via Socket.IO

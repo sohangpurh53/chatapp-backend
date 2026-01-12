@@ -101,6 +101,60 @@ class EncryptionService {
   }
 
   /**
+   * Process encrypted content for client consumption
+   * Handles decompression and proper formatting
+   * @param {string} encryptedContent - Raw encrypted content from database
+   * @param {Object} encryptionMetadata - Encryption metadata
+   * @returns {Object} Processed encrypted content
+   */
+  async processEncryptedContentForClient(encryptedContent, encryptionMetadata = null) {
+    try {
+      if (!encryptedContent) {
+        return null;
+      }
+
+      let processedContent = encryptedContent;
+
+      // Parse metadata if it's a string
+      let metadata = encryptionMetadata;
+      if (typeof encryptionMetadata === 'string') {
+        try {
+          metadata = JSON.parse(encryptionMetadata);
+        } catch (error) {
+          console.warn('Failed to parse encryption metadata:', error);
+          metadata = null;
+        }
+      }
+
+      // Decompress if needed
+      if (metadata && metadata.compressed) {
+        try {
+          processedContent = await this.decompressEncryptedContent(encryptedContent);
+          console.log('✅ Decompressed encrypted content');
+        } catch (error) {
+          console.error('❌ Failed to decompress encrypted content:', error);
+          throw new Error('Failed to decompress encrypted content');
+        }
+      }
+
+      // Parse JSON if it's a string
+      if (typeof processedContent === 'string') {
+        try {
+          return JSON.parse(processedContent);
+        } catch (error) {
+          console.warn('Encrypted content is not valid JSON, returning as string');
+          return processedContent;
+        }
+      }
+
+      return processedContent;
+    } catch (error) {
+      console.error('Error processing encrypted content:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Decompress encrypted content
    * @param {string} compressedContent - Base64 compressed content
    * @returns {string} Decompressed content
