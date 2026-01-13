@@ -269,6 +269,7 @@ class SocketHandlers {
 
       // Enhanced encryption support with validation
       let processedEncryptedContent = null;
+      let senderEncryptedKey = null;
       let encryptionIv = null;
       let authTag = null;
       let encryptionAlgorithm = null;
@@ -297,6 +298,12 @@ class SocketHandlers {
         encryptionAlgorithm = encryptedContent.algorithm || 'AES-256-CBC';
         encryptionVersion = encryptedContent.version || 1;
 
+        // Extract sender's encrypted key for dual encryption
+        if (encryptedContent.senderEncryptedKey) {
+          senderEncryptedKey = encryptedContent.senderEncryptedKey;
+          console.log('🔐 Extracted sender encrypted key for dual encryption');
+        }
+
         // Store compression metadata
         if (compressionResult.compressed) {
           encryptionMetadata = {
@@ -313,14 +320,16 @@ class SocketHandlers {
           version: encryptionVersion,
           compressed: compressionResult.compressed,
           originalSize: compressionResult.originalSize,
-          finalSize: processedEncryptedContent.length
+          finalSize: processedEncryptedContent.length,
+          hasSenderKey: !!senderEncryptedKey
         });
       }
 
       // Create message with enhanced encryption support
       const messageData = {
-        content: content, // Always store the original content for sender to see
+        content: isEncrypted ? '[ENCRYPTED]' : content,
         encryptedContent: processedEncryptedContent,
+        senderEncryptedKey,
         isEncrypted,
         keyId: isEncrypted ? keyId : null,
         encryptionIv,
@@ -371,6 +380,7 @@ class SocketHandlers {
         attributes: { 
           include: [
             'encryptedContent', 
+            'senderEncryptedKey',
             'isEncrypted', 
             'keyId',
             'encryptionIv',

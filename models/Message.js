@@ -17,6 +17,13 @@ const Message = sequelize.define('Message', {
     allowNull: true,
     defaultValue: null
   },
+  // Store sender's encrypted key for dual encryption (so sender can decrypt their own messages)
+  senderEncryptedKey: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    defaultValue: null,
+    comment: 'AES key encrypted with sender\'s public key (for sender to decrypt their own messages)'
+  },
   isEncrypted: {
     type: DataTypes.BOOLEAN,
     defaultValue: false
