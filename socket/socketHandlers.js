@@ -319,7 +319,7 @@ class SocketHandlers {
 
       // Create message with enhanced encryption support
       const messageData = {
-        content: isEncrypted ? '[ENCRYPTED]' : content,
+        content: content, // Always store the original content for sender to see
         encryptedContent: processedEncryptedContent,
         isEncrypted,
         keyId: isEncrypted ? keyId : null,
