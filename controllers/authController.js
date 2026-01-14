@@ -9,7 +9,7 @@ const generateToken = (userId) => {
 
 const register = async (req, res) => {
   try {
-    const { username, email, password, publicKey, encryptedPrivateKey, keySalt } = req.body;
+    const { username, email, password, publicKey, encryptedPrivateKey, keySalt, keyIv } = req.body;
 
     console.log('📥 Registration request received:', {
       username,
@@ -17,7 +17,8 @@ const register = async (req, res) => {
       hasPassword: !!password,
       hasPublicKey: !!publicKey,
       hasEncryptedPrivateKey: !!encryptedPrivateKey,
-      hasKeySalt: !!keySalt
+      hasKeySalt: !!keySalt,
+      hasKeyIv: !!keyIv
     });
 
     // Validate input
@@ -60,6 +61,7 @@ const register = async (req, res) => {
       userData.publicKey = publicKey;
       userData.encryptedPrivateKey = encryptedPrivateKey;
       userData.keySalt = keySalt;
+      userData.keyIv = keyIv; // Store IV for private key decryption
       userData.encryptionEnabled = true;
       
       console.log('🔐 User registered with encryption keys');
@@ -230,7 +232,7 @@ const getUserPublicKey = async (req, res) => {
 // Enhanced upload/update encryption keys with validation
 const uploadKeys = async (req, res) => {
   try {
-    const { publicKey, encryptedPrivateKey, keySalt } = req.body;
+    const { publicKey, encryptedPrivateKey, keySalt, keyIv } = req.body;
     const userId = req.user.id;
     
     if (!publicKey || !encryptedPrivateKey || !keySalt) {
@@ -251,12 +253,13 @@ const uploadKeys = async (req, res) => {
         publicKey,
         encryptedPrivateKey,
         keySalt,
+        keyIv: keyIv || keySalt, // Store IV, fallback to keySalt for backward compatibility
         keyCreatedAt: new Date(),
         encryptionEnabled: true
       });
     } else {
       // Key rotation
-      await currentUser.rotateKeys(publicKey, encryptedPrivateKey, keySalt);
+      await currentUser.rotateKeys(publicKey, encryptedPrivateKey, keySalt, keyIv);
     }
 
     // Create new encryption session
@@ -282,7 +285,7 @@ const getEncryptedPrivateKey = async (req, res) => {
   try {
     const userId = req.user.id;
     const user = await User.findByPk(userId, {
-      attributes: ['encryptedPrivateKey', 'keySalt', 'keyVersion', 'encryptionEnabled']
+      attributes: ['encryptedPrivateKey', 'keySalt', 'keyIv', 'keyVersion', 'encryptionEnabled']
     });
     
     if (!user || !user.encryptionEnabled || !user.encryptedPrivateKey) {
@@ -292,6 +295,7 @@ const getEncryptedPrivateKey = async (req, res) => {
     res.json({
       encryptedPrivateKey: user.encryptedPrivateKey,
       keySalt: user.keySalt,
+      keyIv: user.keyIv || user.keySalt, // Fallback to keySalt for backward compatibility
       keyVersion: user.keyVersion
     });
   } catch (error) {
@@ -441,7 +445,7 @@ const updateProfile = async (req, res) => {
 // Enhanced update keys with proper rotation tracking
 const updateKeys = async (req, res) => {
   try {
-    const { publicKey, encryptedPrivateKey, keySalt } = req.body;
+    const { publicKey, encryptedPrivateKey, keySalt, keyIv } = req.body;
     const userId = req.user.id;
     
     if (!publicKey || !encryptedPrivateKey || !keySalt) {
@@ -451,7 +455,7 @@ const updateKeys = async (req, res) => {
     const currentUser = await User.findByPk(userId);
     
     // Use the rotateKeys method for proper tracking
-    await currentUser.rotateKeys(publicKey, encryptedPrivateKey, keySalt);
+    await currentUser.rotateKeys(publicKey, encryptedPrivateKey, keySalt, keyIv);
     
     // Create new encryption session
     const encryptionSession = await encryptionService.createEncryptionSession(

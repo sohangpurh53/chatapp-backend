@@ -50,6 +50,11 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING,
     allowNull: true
   },
+  keyIv: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    comment: 'Initialization vector for private key encryption'
+  },
   keyVersion: {
     type: DataTypes.INTEGER,
     defaultValue: 1
@@ -130,7 +135,7 @@ User.prototype.validatePassword = async function(password) {
 };
 
 // Add method to track key rotation
-User.prototype.rotateKeys = async function(newPublicKey, newEncryptedPrivateKey, newKeySalt) {
+User.prototype.rotateKeys = async function(newPublicKey, newEncryptedPrivateKey, newKeySalt, newKeyIv) {
   const history = this.keyRotationHistory || [];
   history.push({
     oldKeyVersion: this.keyVersion,
@@ -142,6 +147,7 @@ User.prototype.rotateKeys = async function(newPublicKey, newEncryptedPrivateKey,
     publicKey: newPublicKey,
     encryptedPrivateKey: newEncryptedPrivateKey,
     keySalt: newKeySalt,
+    keyIv: newKeyIv || newKeySalt, // Store IV, fallback to keySalt for backward compatibility
     keyVersion: (this.keyVersion || 1) + 1,
     keyCreatedAt: new Date(),
     keyRotationHistory: history,
