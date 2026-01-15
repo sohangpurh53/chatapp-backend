@@ -36,6 +36,9 @@ const createChat = async (req, res) => {
       if (existingChat) {
         console.log(`📋 Found existing chat ${existingChat.id} (isActive: ${existingChat.isActive})`);
         
+        // ✅ Capture original state before updating
+        const wasInactive = !existingChat.isActive;
+        
         // ✅ If chat was soft-deleted, restore it
         if (!existingChat.isActive) {
           await existingChat.update({ 
@@ -43,6 +46,12 @@ const createChat = async (req, res) => {
             lastActivityAt: new Date()
           }, { transaction });
           console.log(`✅ Restored chat ${existingChat.id}`);
+        } else {
+          // ✅ Update lastActivityAt even if chat was already active
+          await existingChat.update({ 
+            lastActivityAt: new Date()
+          }, { transaction });
+          console.log(`✅ Updated lastActivityAt for chat ${existingChat.id}`);
         }
 
         // ✅ Check both participants' status
@@ -107,7 +116,7 @@ const createChat = async (req, res) => {
         console.log(`✅ Returning existing/restored chat ${existingChat.id} to user ${userId}`);
         return res.json({ 
           chat: completeChat,
-          restored: !existingChat.isActive // Indicate if chat was restored
+          restored: wasInactive // ✅ Use captured state
         });
       }
     }
