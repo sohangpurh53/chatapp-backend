@@ -2,18 +2,25 @@ const { Chat, User, Message, ChatParticipant, MessageReceipt, GroupInvite, UserM
 const { Op } = require('sequelize');
 
 const createChat = async (req, res) => {
+  // ✅ Use transaction for data consistency
+  const sequelize = require('../config/database');
+  const transaction = await sequelize.transaction();
+  
   try {
     const { participantIds, isGroup, name, description } = req.body;
     const userId = req.user.id;
 
     // For direct chat, ensure only 2 participants
     if (!isGroup && participantIds.length !== 1) {
+      await transaction.rollback();
       return res.status(400).json({ error: 'Direct chat must have exactly 2 participants' });
     }
 
     // Check if direct chat already exists
     if (!isGroup) {
       const otherUserId = participantIds[0];
+      
+      // ✅ ROBUST FIX: Check for existing chat (including soft-deleted ones)
       const existingChat = await Chat.findOne({
         where: {
           isGroup: false,
@@ -21,11 +28,58 @@ const createChat = async (req, res) => {
             { participant1Id: userId, participant2Id: otherUserId },
             { participant1Id: otherUserId, participant2Id: userId }
           ]
-        }
+        },
+        paranoid: false, // Include soft-deleted chats
+        transaction
       });
 
       if (existingChat) {
-        // Return existing chat with participants
+        console.log(`📋 Found existing chat ${existingChat.id} (isActive: ${existingChat.isActive})`);
+        
+        // ✅ If chat was soft-deleted, restore it
+        if (!existingChat.isActive) {
+          await existingChat.update({ 
+            isActive: true,
+            lastActivityAt: new Date()
+          }, { transaction });
+          console.log(`✅ Restored chat ${existingChat.id}`);
+        }
+
+        // ✅ Check both participants' status
+        const participants = await ChatParticipant.findAll({
+          where: {
+            chatId: existingChat.id,
+            userId: { [Op.in]: [userId, otherUserId] }
+          },
+          transaction
+        });
+
+        // ✅ Ensure both participants are active
+        for (const participant of participants) {
+          if (!participant.isActive) {
+            await participant.update({ isActive: true }, { transaction });
+            console.log(`✅ Reactivated participant ${participant.userId} in chat ${existingChat.id}`);
+          }
+        }
+
+        // ✅ If any participant is missing, create them
+        const participantUserIds = participants.map(p => p.userId);
+        const missingUserIds = [userId, otherUserId].filter(id => !participantUserIds.includes(id));
+        
+        for (const missingUserId of missingUserIds) {
+          await ChatParticipant.create({
+            userId: missingUserId,
+            chatId: existingChat.id,
+            role: 'member',
+            isActive: true
+          }, { transaction });
+          console.log(`✅ Created missing participant ${missingUserId} in chat ${existingChat.id}`);
+        }
+
+        // ✅ Commit transaction before fetching complete data
+        await transaction.commit();
+
+        // ✅ Return complete chat with all data
         const completeChat = await Chat.findByPk(existingChat.id, {
           include: [
             {
@@ -37,10 +91,24 @@ const createChat = async (req, res) => {
               model: User,
               as: 'participant2',
               attributes: ['id', 'username', 'avatar', 'isOnline']
+            },
+            {
+              model: User,
+              as: 'participants',
+              attributes: ['id', 'username', 'avatar', 'isOnline'],
+              through: { 
+                where: { isActive: true },
+                attributes: ['role', 'joinedAt']
+              }
             }
           ]
         });
-        return res.json({ chat: completeChat });
+        
+        console.log(`✅ Returning existing/restored chat ${existingChat.id} to user ${userId}`);
+        return res.json({ 
+          chat: completeChat,
+          restored: !existingChat.isActive // Indicate if chat was restored
+        });
       }
     }
 
@@ -59,7 +127,7 @@ const createChat = async (req, res) => {
       chatData.participant2Id = participantIds[0];
     }
 
-    const chat = await Chat.create(chatData);
+    const chat = await Chat.create(chatData, { transaction });
 
     // Add creator as participant (admin for groups)
     await ChatParticipant.create({
@@ -67,7 +135,7 @@ const createChat = async (req, res) => {
       chatId: chat.id,
       role: isGroup ? 'admin' : 'member',
       isActive: true
-    });
+    }, { transaction });
 
     // Add other participants
     for (const participantId of participantIds) {
@@ -78,9 +146,12 @@ const createChat = async (req, res) => {
           chatId: chat.id,
           role: 'member',
           isActive: true
-        });
+        }, { transaction });
       }
     }
+
+    // ✅ Commit transaction
+    await transaction.commit();
 
     // Fetch complete chat data with all participants
     const includeOptions = [{
@@ -112,11 +183,16 @@ const createChat = async (req, res) => {
       include: includeOptions
     });
 
-    console.log(`Created chat ${chat.id} with ${completeChat.participants?.length || 0} participants`);
+    console.log(`✅ Created chat ${chat.id} with ${completeChat.participants?.length || 0} participants`);
 
     res.status(201).json({ chat: completeChat });
   } catch (error) {
-    console.error('Create chat error:', error);
+    // ✅ Rollback transaction on error
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+      console.log('🔄 Transaction rolled back due to error');
+    }
+    console.error('❌ Create chat error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -878,29 +954,33 @@ const deleteChat = async (req, res) => {
         return res.status(403).json({ error: 'Only admins can delete groups' });
       }
 
-      // Delete the entire group
+      // Delete the entire group - mark all participants as inactive
       await ChatParticipant.update(
         { isActive: false },
         { where: { chatId } }
       );
 
+      // ✅ Soft delete the chat
       await chat.update({ isActive: false });
 
-      console.log(`Group ${chatId} deleted by admin ${userId}`);
+      console.log(`🗑️ Group ${chatId} soft-deleted by admin ${userId}`);
     } else {
-      // For direct chats, just mark participant as inactive
+      // ✅ For direct chats, mark current user's participant as inactive
       await participant.update({ isActive: false });
+      console.log(`🗑️ User ${userId} marked as inactive in chat ${chatId}`);
 
-      // Check if both participants have left
+      // ✅ Check if both participants have left
       const activeParticipants = await ChatParticipant.count({
         where: { chatId, isActive: true }
       });
 
+      // ✅ Only soft-delete chat if BOTH participants have left
       if (activeParticipants === 0) {
         await chat.update({ isActive: false });
+        console.log(`🗑️ Chat ${chatId} soft-deleted (both participants left)`);
+      } else {
+        console.log(`✅ Chat ${chatId} remains active (other participant still active)`);
       }
-
-      console.log(`User ${userId} left chat ${chatId}`);
     }
 
     res.json({ success: true });
