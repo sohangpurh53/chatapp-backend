@@ -963,6 +963,29 @@ const deleteChat = async (req, res) => {
         return res.status(403).json({ error: 'Only admins can delete groups' });
       }
 
+      // ✅ NEW: Mark all messages as deleted for the admin who is deleting the group
+      const messages = await Message.findAll({
+        where: { chatId },
+        attributes: ['id']
+      });
+
+      if (messages.length > 0) {
+        const messageIds = messages.map(msg => msg.id);
+        
+        // Create deletion records for all messages (for this user only)
+        const deletionRecords = messageIds.map(messageId => ({
+          messageId,
+          userId,
+          deletedAt: new Date()
+        }));
+
+        await UserMessageDeletion.bulkCreate(deletionRecords, {
+          ignoreDuplicates: true
+        });
+
+        console.log(`✅ Marked ${messageIds.length} messages as deleted for admin ${userId} in group ${chatId}`);
+      }
+
       // Delete the entire group - mark all participants as inactive
       await ChatParticipant.update(
         { isActive: false },
@@ -977,6 +1000,29 @@ const deleteChat = async (req, res) => {
       // ✅ For direct chats, mark current user's participant as inactive
       await participant.update({ isActive: false });
       console.log(`🗑️ User ${userId} marked as inactive in chat ${chatId}`);
+
+      // ✅ NEW: Mark all messages in this chat as deleted for this user
+      const messages = await Message.findAll({
+        where: { chatId },
+        attributes: ['id']
+      });
+
+      if (messages.length > 0) {
+        const messageIds = messages.map(msg => msg.id);
+        
+        // Create deletion records for all messages (for this user only)
+        const deletionRecords = messageIds.map(messageId => ({
+          messageId,
+          userId,
+          deletedAt: new Date()
+        }));
+
+        await UserMessageDeletion.bulkCreate(deletionRecords, {
+          ignoreDuplicates: true // In case some messages were already deleted
+        });
+
+        console.log(`✅ Marked ${messageIds.length} messages as deleted for user ${userId} in chat ${chatId}`);
+      }
 
       // ✅ Check if both participants have left
       const activeParticipants = await ChatParticipant.count({
@@ -1020,6 +1066,29 @@ const leaveGroup = async (req, res) => {
 
     if (!participant) {
       return res.status(403).json({ error: 'Not a member of this group' });
+    }
+
+    // ✅ NEW: Mark all messages in this group as deleted for this user
+    const messages = await Message.findAll({
+      where: { chatId },
+      attributes: ['id']
+    });
+
+    if (messages.length > 0) {
+      const messageIds = messages.map(msg => msg.id);
+      
+      // Create deletion records for all messages (for this user only)
+      const deletionRecords = messageIds.map(messageId => ({
+        messageId,
+        userId,
+        deletedAt: new Date()
+      }));
+
+      await UserMessageDeletion.bulkCreate(deletionRecords, {
+        ignoreDuplicates: true
+      });
+
+      console.log(`✅ Marked ${messageIds.length} messages as deleted for user ${userId} leaving group ${chatId}`);
     }
 
     // Mark participant as inactive
