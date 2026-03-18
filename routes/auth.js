@@ -5,6 +5,7 @@ const {
   register,
   login,
   logout,
+  refreshToken,
   getProfile,
   updateProfile,
   getUserPublicKey,
@@ -18,6 +19,7 @@ const {
 
 router.post('/register', register);
 router.post('/login', login);
+router.post('/refresh', refreshToken); // No auth middleware - refresh token is the credential
 router.post('/logout', authenticateToken, logout);
 router.get('/profile', authenticateToken, getProfile);
 router.put('/profile', authenticateToken, updateProfile);

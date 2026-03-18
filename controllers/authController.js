@@ -7,6 +7,10 @@ const generateToken = (userId) => {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
 
+const generateRefreshToken = (userId) => {
+  return jwt.sign({ userId, type: 'refresh' }, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh', { expiresIn: '30d' });
+};
+
 const register = async (req, res) => {
   try {
     const { username, email, password, publicKey, encryptedPrivateKey, keySalt, keyIv } = req.body;
@@ -70,6 +74,7 @@ const register = async (req, res) => {
     const user = await User.create(userData);
 
     const token = generateToken(user.id);
+    const refreshToken = generateRefreshToken(user.id);
 
     // Create encryption session if keys were provided
     let encryptionSession = null;
@@ -87,6 +92,7 @@ const register = async (req, res) => {
     res.status(201).json({
       message: 'User registered successfully',
       token,
+      refreshToken,
       user: {
         id: user.id,
         username: user.username,
@@ -134,6 +140,7 @@ const login = async (req, res) => {
     await user.update({ isOnline: true, lastSeen: new Date() });
 
     const token = generateToken(user.id);
+    const refreshToken = generateRefreshToken(user.id);
 
     // Create encryption session if user has encryption enabled
     let encryptionSession = null;
@@ -151,6 +158,7 @@ const login = async (req, res) => {
     res.json({
       message: 'Login successful',
       token,
+      refreshToken,
       user: {
         id: user.id,
         username: user.username,
@@ -512,10 +520,50 @@ const getEncryptionStats = async (req, res) => {
   }
 };
 
+const refreshToken = async (req, res) => {
+  try {
+    const { refreshToken: token } = req.body;
+
+    if (!token) {
+      return res.status(401).json({ error: 'Refresh token required' });
+    }
+
+    const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh';
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, REFRESH_SECRET);
+    } catch (err) {
+      return res.status(401).json({ error: 'Invalid or expired refresh token', code: 'REFRESH_TOKEN_EXPIRED' });
+    }
+
+    if (decoded.type !== 'refresh') {
+      return res.status(401).json({ error: 'Invalid token type' });
+    }
+
+    const user = await User.findByPk(decoded.userId);
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    const newAccessToken = generateToken(user.id);
+    const newRefreshToken = generateRefreshToken(user.id);
+
+    res.json({
+      token: newAccessToken,
+      refreshToken: newRefreshToken,
+    });
+  } catch (error) {
+    console.error('Refresh token error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
   register,
   login,
   logout,
+  refreshToken,
   getProfile,
   updateProfile,
   getUserPublicKey,
