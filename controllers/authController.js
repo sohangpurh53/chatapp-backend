@@ -284,6 +284,36 @@ const googleLogin = async (req, res) => {
   }
 };
 
+/**
+ * POST /auth/vibes {userIds: string[]} -> { vibes: { [userId]: vibe } } (unexpired only)
+ */
+const getVibes = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.userIds) ? req.body.userIds.filter(id => typeof id === 'string').slice(0, 200) : [];
+    if (ids.length === 0) {
+      return res.json({ vibes: {} });
+    }
+
+    const users = await User.findAll({
+      where: { id: { [Op.in]: ids } },
+      attributes: ['id', 'vibe']
+    });
+
+    const now = Date.now();
+    const vibes = {};
+    users.forEach(u => {
+      if (u.vibe && u.vibe.expiresAt && new Date(u.vibe.expiresAt).getTime() > now) {
+        vibes[u.id] = u.vibe;
+      }
+    });
+
+    res.json({ vibes });
+  } catch (error) {
+    console.error('Get vibes error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 const logout = async (req, res) => {
   try {
     await req.user.update({
@@ -671,6 +701,7 @@ module.exports = {
   register,
   login,
   googleLogin,
+  getVibes,
   logout,
   refreshToken,
   getProfile,

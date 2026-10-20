@@ -90,6 +90,11 @@ const User = sequelize.define('User', {
     defaultValue: 100000,
     comment: 'PBKDF2 rounds for key derivation'
   },
+  // "Vibe": short-lived mood shown as an aura around the user's orb {emoji,label,color,expiresAt}
+  vibe: {
+    type: DataTypes.JSON,
+    allowNull: true
+  },
   // FCM Push Notification fields
   fcmToken: {
     type: DataTypes.STRING,

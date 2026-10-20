@@ -5,6 +5,7 @@ const {
   register,
   login,
   googleLogin,
+  getVibes,
   logout,
   refreshToken,
   getProfile,
@@ -23,6 +24,7 @@ router.post('/login', login);
 router.post('/google', googleLogin);
 router.post('/refresh', refreshToken); // No auth middleware - refresh token is the credential
 router.post('/logout', authenticateToken, logout);
+router.post('/vibes', authenticateToken, getVibes);
 router.get('/profile', authenticateToken, getProfile);
 router.put('/profile', authenticateToken, updateProfile);
 router.get('/users/:userId/public-key', authenticateToken, getUserPublicKey);

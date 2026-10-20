@@ -12,6 +12,7 @@ class SocketHandlers {
     this.activeCalls = new Map(); // callId -> callData
     this.userCalls = new Map(); // userId -> callId
     this.callTimeouts = new Map(); // callId -> timeoutId
+    this.lastWaveAt = new Map(); // `${from}:${to}` -> timestamp (rate limit)
   }
 
   async handleConnection(socket) {
@@ -68,6 +69,10 @@ class SocketHandlers {
     socket.on('bulk_delete_messages', (data) => this.handleBulkDeleteMessages(socket, data));
     socket.on('file_downloaded', (data) => this.handleFileDownloaded(socket, data));
     socket.on('get-online-users', () => this.handleGetOnlineUsers(socket));
+
+    // Orbit: ephemeral waves + vibes
+    socket.on('wave_send', (data) => this.handleWaveSend(socket, data));
+    socket.on('vibe_update', (data) => this.handleVibeUpdate(socket, data));
     
 
     // ✅ UNIFIED CALL EVENTS - Use only initiate_call (remove duplicate initiate-call)
@@ -497,6 +502,71 @@ class SocketHandlers {
           code: 'SEND_FAILED'
         });
       }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Orbit: waves (ephemeral nudges) and vibes (24h mood aura)
+  // ---------------------------------------------------------------------------
+
+  handleWaveSend(socket, data) {
+    const toUserId = data && typeof data.toUserId === 'string' ? data.toUserId : null;
+    const emoji = data && typeof data.emoji === 'string' && data.emoji.length <= 8 ? data.emoji : '\u{1F44B}';
+
+    if (!toUserId || toUserId === socket.userId) {
+      return socket.emit('wave_result', { toUserId, delivered: false, reason: 'invalid_target' });
+    }
+
+    const key = `${socket.userId}:${toUserId}`;
+    const now = Date.now();
+    if (now - (this.lastWaveAt.get(key) || 0) < 4000) {
+      return socket.emit('wave_result', { toUserId, delivered: false, reason: 'rate_limited' });
+    }
+    this.lastWaveAt.set(key, now);
+
+    const targetSocketId = this.connectedUsers.get(toUserId);
+    if (!targetSocketId) {
+      return socket.emit('wave_result', { toUserId, delivered: false, reason: 'offline' });
+    }
+
+    this.io.to(targetSocketId).emit('wave_received', {
+      fromUserId: socket.userId,
+      fromUsername: socket.user.username,
+      fromAvatar: socket.user.avatar || null,
+      emoji,
+      sentAt: new Date().toISOString()
+    });
+    socket.emit('wave_result', { toUserId, delivered: true });
+  }
+
+  async handleVibeUpdate(socket, data) {
+    try {
+      let vibe = null;
+
+      if (data && data.clear !== true) {
+        const emoji = typeof data.emoji === 'string' ? data.emoji.slice(0, 8) : '';
+        const label = typeof data.label === 'string' ? data.label.trim().slice(0, 40) : '';
+        const color = typeof data.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(data.color) ? data.color : '#7C5CFF';
+
+        if (!emoji && !label) {
+          return socket.emit('vibe_updated', { error: 'Vibe needs an emoji or a label' });
+        }
+
+        vibe = { emoji, label, color, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() };
+      }
+
+      await User.update({ vibe }, { where: { id: socket.userId } });
+
+      const payload = { userId: socket.userId, vibe };
+      socket.emit('vibe_updated', payload);
+      for (const room of socket.rooms) {
+        if (typeof room === 'string' && room.startsWith('chat_')) {
+          socket.to(room).emit('user_vibe_changed', payload);
+        }
+      }
+    } catch (error) {
+      console.error('Error updating vibe:', error);
+      socket.emit('vibe_updated', { error: 'Failed to update vibe' });
     }
   }
 
