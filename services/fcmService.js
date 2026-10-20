@@ -208,10 +208,16 @@ class FCMService {
                                  notification?.data?.type === 'incoming_call_with_signal' ||
                                  notification?.data?.type === 'incoming_call_offline';
 
+      // Encrypted chat messages are sent data-only so the app can decrypt them
+      // and display the real text instead of the "Encrypted message" placeholder
+      const isEncryptedMessage = notification.type === 'new_message' &&
+                                 notification?.data?.isEncrypted === 'true';
+      const isDataOnly = isCallNotification || isEncryptedMessage;
+
       const message = {
         token: fcmToken,
         // ✅ Only include notification for non-call types
-        ...((!isCallNotification) && {
+        ...((!isDataOnly) && {
           notification: {
             title: notification.title,
             body: notification.body
@@ -227,11 +233,11 @@ class FCMService {
         },
         android: {
           // ✅ Use high priority for call notifications
-          priority: (notification.type === 'incoming_call' || 
+          priority: (isEncryptedMessage || notification.type === 'incoming_call' ||
                      notification?.data?.type === 'incoming_call_with_signal' ||
                      notification?.data?.type === 'incoming_call_offline') ? 'high' : 'normal',
           // ✅ FIXED: Only include notification config for non-call notifications
-          ...(!isCallNotification && {
+          ...(!isDataOnly && {
             notification: {
               sound: prefs.soundEnabled !== false ? 'default' : undefined,
               channelId: this.getChannelId(notification?.data?.type),

@@ -174,6 +174,8 @@ class NotificationService {
           chatId,
           messageType,
           messagePreview,
+          // Server cannot read E2E content: client decrypts and shows the notification itself
+          isEncrypted: isEncrypted ? 'true' : 'false',
           action: 'open_chat',
           
           // Essential chat information only
