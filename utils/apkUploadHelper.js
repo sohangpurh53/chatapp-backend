@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { minioClient, presignedPublicUrl } = require('../config/minio');
+const { minioClient, publicObjectUrl } = require('../config/minio');
 
 /**
  * APK Upload Helper Utilities
@@ -186,12 +186,8 @@ class APKUploadHelper {
       // Check if file exists
       await minioClient.statObject(this.bucketName, objectName);
       
-      // Generate presigned URL
-      const downloadUrl = await presignedPublicUrl(
-        this.bucketName, 
-        objectName, 
-        expirySeconds
-      );
+      // Public download URL (bucket is public-read, no expiry)
+      const downloadUrl = publicObjectUrl(this.bucketName, objectName);
 
       return downloadUrl;
     } catch (error) {

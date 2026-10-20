@@ -10,26 +10,14 @@ const minioClient = new Minio.Client({
 
 const BUCKET_NAME = process.env.MINIO_BUCKET || 'chatapp-media';
 
-// Client used only for signing download URLs against the public MinIO host
-// (MINIO_PUBLIC_URL), so links handed out don't point at the internal endpoint.
-// Region is fixed so presigning doesn't need a network round-trip.
-let publicMinioClient = minioClient;
-if (process.env.MINIO_PUBLIC_URL) {
-  const publicUrl = new URL(process.env.MINIO_PUBLIC_URL);
-  const useSSL = publicUrl.protocol === 'https:';
-  publicMinioClient = new Minio.Client({
-    endPoint: publicUrl.hostname,
-    port: publicUrl.port ? parseInt(publicUrl.port) : (useSSL ? 443 : 80),
-    useSSL,
-    accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-    secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
-    region: process.env.MINIO_REGION || 'us-east-1',
-  });
-}
-
-// Presigned GET URL on the public host
-function presignedPublicUrl(bucket, objectName, expirySeconds) {
-  return publicMinioClient.presignedGetObject(bucket, objectName, expirySeconds);
+// Plain (non-presigned) public URL for an object. The bucket has a public-read
+// policy, so this link works without a signature and never expires.
+function publicObjectUrl(bucket, objectName) {
+  const base = process.env.MINIO_PUBLIC_URL
+    ? process.env.MINIO_PUBLIC_URL.replace(/\/+$/, '')
+    : `${process.env.MINIO_USE_SSL === 'true' ? 'https' : 'http'}://${process.env.MINIO_ENDPOINT || 'localhost'}:${parseInt(process.env.MINIO_PORT) || 9000}`;
+  const path = objectName.split('/').map(encodeURIComponent).join('/');
+  return `${base}/${bucket}/${path}`;
 }
 
 // Initialize bucket
@@ -78,7 +66,7 @@ async function testConnection() {
 module.exports = {
   minioClient,
   BUCKET_NAME,
-  presignedPublicUrl,
+  publicObjectUrl,
   initializeBucket,
   testConnection
 };
