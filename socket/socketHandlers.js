@@ -441,6 +441,16 @@ class SocketHandlers {
         }
       }
 
+      // Make sure every online participant is in the room. Chats created after a
+      // user connected (or rooms left via leave_chat) would otherwise miss this.
+      socket.join(`chat_${chatId}`);
+      for (const participant of participants) {
+        const participantSocketId = this.connectedUsers.get(participant.userId);
+        if (participantSocketId) {
+          this.io.in(participantSocketId).socketsJoin(`chat_${chatId}`);
+        }
+      }
+
       // Emit message to all participants
       this.io.to(`chat_${chatId}`).emit('new_message', messageToEmit);
       
@@ -581,6 +591,7 @@ class SocketHandlers {
 
     // Notify others in the chat
     socket.to(`chat_${chatId}`).emit('user_typing', {
+      chatId,
       userId: socket.userId,
       username: socket.user.username,
       isTyping: true
@@ -600,6 +611,7 @@ class SocketHandlers {
 
     // Notify others in the chat
     socket.to(`chat_${chatId}`).emit('user_typing', {
+      chatId,
       userId: socket.userId,
       username: socket.user.username,
       isTyping: false
@@ -926,6 +938,7 @@ class SocketHandlers {
 
         // Notify others that user stopped typing
         socket.to(`chat_${chatId}`).emit('user_typing', {
+          chatId,
           userId: socket.userId,
           username: socket.user.username,
           isTyping: false
