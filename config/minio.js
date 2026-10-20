@@ -10,6 +10,28 @@ const minioClient = new Minio.Client({
 
 const BUCKET_NAME = process.env.MINIO_BUCKET || 'chatapp-media';
 
+// Client used only for signing download URLs against the public MinIO host
+// (MINIO_PUBLIC_URL), so links handed out don't point at the internal endpoint.
+// Region is fixed so presigning doesn't need a network round-trip.
+let publicMinioClient = minioClient;
+if (process.env.MINIO_PUBLIC_URL) {
+  const publicUrl = new URL(process.env.MINIO_PUBLIC_URL);
+  const useSSL = publicUrl.protocol === 'https:';
+  publicMinioClient = new Minio.Client({
+    endPoint: publicUrl.hostname,
+    port: publicUrl.port ? parseInt(publicUrl.port) : (useSSL ? 443 : 80),
+    useSSL,
+    accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
+    secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
+    region: process.env.MINIO_REGION || 'us-east-1',
+  });
+}
+
+// Presigned GET URL on the public host
+function presignedPublicUrl(bucket, objectName, expirySeconds) {
+  return publicMinioClient.presignedGetObject(bucket, objectName, expirySeconds);
+}
+
 // Initialize bucket
 async function initializeBucket() {
   try {
@@ -56,6 +78,7 @@ async function testConnection() {
 module.exports = {
   minioClient,
   BUCKET_NAME,
+  presignedPublicUrl,
   initializeBucket,
   testConnection
 };

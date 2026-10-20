@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { minioClient } = require('../config/minio');
+const { minioClient, presignedPublicUrl } = require('../config/minio');
 
 // Configure multer for APK file uploads
 const storage = multer.memoryStorage();
@@ -107,7 +107,7 @@ router.post('/upload', verifyAPKUploadAuth, upload.single('file'), async (req, r
     );
 
     // Generate download URL (expires in 24 hours)
-    const downloadUrl = await minioClient.presignedGetObject(bucketName, objectName, 24 * 60 * 60);
+    const downloadUrl = await presignedPublicUrl(bucketName, objectName, 24 * 60 * 60);
 
     console.log(`✅ APK uploaded successfully: ${objectName} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
@@ -213,7 +213,7 @@ router.get('/download/:filename', verifyAPKUploadAuth, async (req, res) => {
     }
 
     // Generate download URL (expires in 1 hour)
-    const downloadUrl = await minioClient.presignedGetObject(bucketName, objectName, 60 * 60);
+    const downloadUrl = await presignedPublicUrl(bucketName, objectName, 60 * 60);
 
     res.json({
       success: true,
