@@ -270,6 +270,14 @@ class SocketHandlers {
       let receiverId = null;
       if (!chat.isGroup) {
         receiverId = chat.participant1Id === socket.userId ? chat.participant2Id : chat.participant1Id;
+
+        // The receiver may have deleted this chat (which only deactivates them).
+        // A new message brings it back for them, otherwise it would never be
+        // delivered, notified or listed. Their old messages stay deleted.
+        await ChatParticipant.update(
+          { isActive: true },
+          { where: { chatId, userId: receiverId, isActive: false } }
+        );
       }
 
       // Enhanced encryption support with validation
