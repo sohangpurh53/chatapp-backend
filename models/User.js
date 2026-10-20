@@ -23,7 +23,17 @@ const User = sequelize.define('User', {
   },
   password: {
     type: DataTypes.STRING,
-    allowNull: false
+    allowNull: true // nullable: Google-only accounts have no local password
+  },
+  authProvider: {
+    type: DataTypes.ENUM('local', 'google'),
+    allowNull: false,
+    defaultValue: 'local'
+  },
+  googleId: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true
   },
   avatar: {
     type: DataTypes.STRING,
@@ -131,6 +141,7 @@ const User = sequelize.define('User', {
 });
 
 User.prototype.validatePassword = async function(password) {
+  if (!this.password) return false; // Google-only account, no local password set
   return await bcrypt.compare(password, this.password);
 };
 

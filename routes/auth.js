@@ -4,6 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const {
   register,
   login,
+  googleLogin,
   logout,
   refreshToken,
   getProfile,
@@ -19,6 +20,7 @@ const {
 
 router.post('/register', register);
 router.post('/login', login);
+router.post('/google', googleLogin);
 router.post('/refresh', refreshToken); // No auth middleware - refresh token is the credential
 router.post('/logout', authenticateToken, logout);
 router.get('/profile', authenticateToken, getProfile);

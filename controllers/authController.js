@@ -1,7 +1,10 @@
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 const { User, EncryptionSession } = require('../models');
 const { Op } = require('sequelize');
 const encryptionService = require('../services/encryptionService');
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const generateToken = (userId) => {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
@@ -172,6 +175,111 @@ const login = async (req, res) => {
     });
   } catch (error) {
     console.error('Login error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
+ * Generates a unique username from a Google account's email local-part,
+ * appending a numeric suffix if the base is already taken.
+ */
+const generateUsernameFromEmail = async (email) => {
+  const base = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '').slice(0, 20) || 'user';
+  let candidate = base;
+  let suffix = 0;
+
+  while (await User.findOne({ where: { username: candidate } })) {
+    suffix += 1;
+    candidate = `${base}${suffix}`;
+  }
+
+  return candidate;
+};
+
+const googleLogin = async (req, res) => {
+  try {
+    const { idToken } = req.body;
+
+    if (!idToken) {
+      return res.status(400).json({ error: 'idToken is required' });
+    }
+
+    let payload;
+    try {
+      const ticket = await googleClient.verifyIdToken({
+        idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+      payload = ticket.getPayload();
+    } catch (verifyError) {
+      console.error('Google idToken verification failed:', verifyError);
+      return res.status(401).json({ error: 'Invalid Google token' });
+    }
+
+    const { sub: googleId, email, name, picture } = payload;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Google account has no email' });
+    }
+
+    // Find by googleId first, then fall back to linking an existing
+    // email/password account that signs in with Google for the first time.
+    let user = await User.findOne({ where: { googleId } });
+
+    if (!user) {
+      user = await User.findOne({ where: { email } });
+
+      if (user) {
+        if (!user.googleId) {
+          await user.update({ googleId });
+        }
+      } else {
+        const username = await generateUsernameFromEmail(email);
+        user = await User.create({
+          username,
+          email,
+          password: null,
+          authProvider: 'google',
+          googleId,
+          avatar: picture || null,
+        });
+      }
+    }
+
+    await user.update({ isOnline: true, lastSeen: new Date() });
+
+    const token = generateToken(user.id);
+    const refreshToken = generateRefreshToken(user.id);
+
+    let encryptionSession = null;
+    if (user.encryptionEnabled) {
+      try {
+        encryptionSession = await encryptionService.createEncryptionSession(
+          user.id,
+          { userAgent: req.headers['user-agent'], ip: req.ip }
+        );
+      } catch (sessionError) {
+        console.warn('Failed to create encryption session:', sessionError);
+      }
+    }
+
+    res.json({
+      message: 'Login successful',
+      token,
+      refreshToken,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        avatar: user.avatar,
+        isOnline: user.isOnline,
+        publicKey: user.publicKey,
+        encryptionEnabled: user.encryptionEnabled,
+      },
+      encryptionSession,
+    });
+  } catch (error) {
+    console.error('Google login error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -562,6 +670,7 @@ const refreshToken = async (req, res) => {
 module.exports = {
   register,
   login,
+  googleLogin,
   logout,
   refreshToken,
   getProfile,
