@@ -24,6 +24,19 @@ class SocketHandlers {
     // Update user online status
     this.updateUserOnlineStatus(socket.userId, true);
 
+    // The Redis online key has a 5-minute TTL (so a crashed server can't leave
+    // users "online" forever). Refresh it from the engine heartbeat, otherwise
+    // users connected longer than 5 minutes look offline and get push
+    // notifications while the app is open.
+    let lastPresenceRefresh = Date.now();
+    socket.conn.on('packet', (packet) => {
+      if (packet.type !== 'pong' || Date.now() - lastPresenceRefresh < 60000) return;
+      lastPresenceRefresh = Date.now();
+      if (this.connectedUsers.get(socket.userId) === socket.id) {
+        redisService.setUserOnline(socket.userId, socket.id);
+      }
+    });
+
     // Join user to their chat rooms
     this.joinUserChats(socket);
 
@@ -933,11 +946,17 @@ class SocketHandlers {
       console.error(`❌ Error cleaning up call state for user ${socket.userId}:`, error);
     }
 
-    // Remove from connected users
-    this.connectedUsers.delete(socket.userId);
-
-    // Update user offline status
-    await this.updateUserOnlineStatus(socket.userId, false);
+    // A reconnect can create the new socket before the old one's disconnect
+    // arrives (and a user may have several devices). Only go offline when this
+    // was the user's last live socket; otherwise point at the remaining one.
+    const remainingSocket = this.findLiveSocket(socket.userId, socket.id);
+    if (remainingSocket) {
+      this.connectedUsers.set(socket.userId, remainingSocket.id);
+      console.log(`User ${socket.userId} still connected via socket ${remainingSocket.id}, staying online`);
+    } else {
+      this.connectedUsers.delete(socket.userId);
+      await this.updateUserOnlineStatus(socket.userId, false);
+    }
 
     // Clean up typing status
     this.typingUsers.forEach((users, chatId) => {
@@ -957,6 +976,32 @@ class SocketHandlers {
         }
       }
     });
+  }
+
+  /** Another connected socket for this user, if any (excluding `excludeSocketId`). */
+  findLiveSocket(userId, excludeSocketId) {
+    for (const s of this.io.of('/').sockets.values()) {
+      if (s.userId === userId && s.id !== excludeSocketId && s.connected) {
+        return s;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The server only learns about status through live sockets, so after a
+   * restart or crash nobody is online yet. Clears flags left behind in the DB.
+   */
+  async resetOnlineStatuses() {
+    try {
+      const [count] = await User.update(
+        { isOnline: false },
+        { where: { isOnline: true } }
+      );
+      console.log(`🔄 Reset online status for ${count} users after server start`);
+    } catch (error) {
+      console.error('Error resetting online statuses:', error);
+    }
   }
 
   handleGetOnlineUsers(socket) {

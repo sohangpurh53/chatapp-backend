@@ -125,6 +125,9 @@ async function startServer() {
     await sequelize.sync({ alter: true });
     console.log('Database models synchronized.');
 
+    // Users marked online before a restart/crash have no socket any more
+    await socketHandlers.resetOnlineStatuses();
+
     // Initialize MinIO bucket
     const { initializeBucket } = require('./config/minio');
     await initializeBucket();
