@@ -13,7 +13,8 @@ class MediaService {
       const fileExtension = path.extname(file.originalname);
       const fileName = `${uuidv4()}${fileExtension}`;
       const folder = this.getFolder(fileType);
-      const objectName = `${folder}/${fileName}`;
+      // Per-user prefix: users/<userId>/<images|videos|audio|documents>/<uuid>.<ext>
+      const objectName = `users/${userId}/${folder}/${fileName}`;
 
       console.log(`📤 Uploading file: ${file.originalname} (${file.size} bytes) as ${objectName}`);
 
@@ -65,9 +66,7 @@ class MediaService {
         .jpeg({ quality: 80 })
         .toBuffer();
 
-      const fileExtension = path.extname(objectName);
-      const thumbnailName = objectName.replace(fileExtension, '_thumb.jpg');
-      const thumbnailObjectName = `thumbnails/${thumbnailName}`;
+      const thumbnailObjectName = this.getThumbnailObjectName(objectName);
 
       await minioClient.putObject(
         BUCKET_NAME,
@@ -135,10 +134,8 @@ class MediaService {
       await minioClient.removeObject(BUCKET_NAME, objectName);
       
       // Try to delete thumbnail if exists
-      const fileExtension = path.extname(objectName);
-      const thumbnailName = objectName.replace(fileExtension, '_thumb.jpg');
-      const thumbnailObjectName = `thumbnails/${thumbnailName}`;
-      
+      const thumbnailObjectName = this.getThumbnailObjectName(objectName);
+
       try {
         await minioClient.removeObject(BUCKET_NAME, thumbnailObjectName);
         console.log(`✅ Thumbnail deleted: ${thumbnailObjectName}`);
@@ -186,6 +183,21 @@ class MediaService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Thumbnail location for an object.
+   * New layout:    users/<id>/images/x.png -> users/<id>/thumbnails/x_thumb.jpg
+   * Legacy layout: images/x.png            -> thumbnails/images/x_thumb.jpg
+   */
+  getThumbnailObjectName(objectName) {
+    const fileExtension = path.extname(objectName);
+    const base = path.posix.basename(objectName, fileExtension);
+    const match = objectName.match(/^users\/([^/]+)\//);
+    if (match) {
+      return `users/${match[1]}/thumbnails/${base}_thumb.jpg`;
+    }
+    return `thumbnails/${objectName.slice(0, -fileExtension.length || undefined)}_thumb.jpg`;
   }
 
   /**
