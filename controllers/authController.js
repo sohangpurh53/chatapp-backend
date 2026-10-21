@@ -461,7 +461,7 @@ const getUserInfo = async (req, res) => {
     }
     
     const user = await User.findByPk(userId, {
-      attributes: ['id', 'username', 'avatar', 'isOnline', 'lastSeen']
+      attributes: ['id', 'username', 'avatar', 'isOnline', 'lastSeen', 'createdAt']
     });
     
     if (!user) {
@@ -474,7 +474,8 @@ const getUserInfo = async (req, res) => {
         username: user.username,
         avatar: user.avatar,
         isOnline: user.isOnline,
-        lastSeen: user.lastSeen
+        lastSeen: user.lastSeen,
+        joinedAt: user.createdAt
       }
     });
   } catch (error) {
