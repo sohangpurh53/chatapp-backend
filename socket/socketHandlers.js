@@ -37,6 +37,9 @@ class SocketHandlers {
       }
     });
 
+    // Personal room: lets REST controllers reach this user on any server instance
+    socket.join(`user_${socket.userId}`);
+
     // Join user to their chat rooms
     this.joinUserChats(socket);
 
@@ -279,6 +282,34 @@ class SocketHandlers {
         return;
       }
 
+      // Group rules: announcement mode and slow mode (admins are exempt)
+      if (chat.isGroup && messageType !== 'system') {
+        const isAdmin = participant.role === 'admin' || participant.role === 'moderator';
+        const groupSettings = chat.settings || {};
+        if (!isAdmin && groupSettings.onlyAdminsCanSend) {
+          socket.emit('error', { message: 'Only admins can send messages to this group', code: 'ADMINS_ONLY', chatId });
+          return;
+        }
+        const slowModeSeconds = Number(groupSettings.slowModeSeconds) || 0;
+        if (!isAdmin && slowModeSeconds > 0) {
+          const lastOwn = await Message.findOne({
+            where: { chatId, senderId: socket.userId, messageType: { [Op.ne]: 'system' } },
+            order: [['createdAt', 'DESC']],
+            attributes: ['createdAt']
+          });
+          const waitMs = lastOwn ? slowModeSeconds * 1000 - (Date.now() - new Date(lastOwn.createdAt).getTime()) : 0;
+          if (waitMs > 0) {
+            socket.emit('error', {
+              message: `Slow mode is on. You can send again in ${Math.ceil(waitMs / 1000)}s`,
+              code: 'SLOW_MODE',
+              chatId,
+              retryAfter: Math.ceil(waitMs / 1000)
+            });
+            return;
+          }
+        }
+      }
+
       // For direct chats, set receiverId
       let receiverId = null;
       if (!chat.isGroup) {
@@ -494,8 +525,9 @@ class SocketHandlers {
       const notificationService = require('../services/notificationService');
       for (const participant of participants) {
         const isOnline = await redisService.getUserOnlineStatus(participant.userId);
+        const isMuted = participant.isMuted && (!participant.mutedUntil || new Date(participant.mutedUntil) > new Date());
         
-        if (!isOnline) {
+        if (!isOnline && !isMuted) {
           console.log(`📱 Sending FCM to offline user ${participant.userId}`);
           try {
             await notificationService.notifyNewMessage({

@@ -45,6 +45,9 @@ const io = socketIo(server, {
 // This allows multiple server instances to share Socket.IO state
 setupSocketAdapter(io);
 
+// Controllers push real-time group updates through this
+app.set('io', io);
+
 // Middleware
 app.use(cors());
 app.use(express.json());

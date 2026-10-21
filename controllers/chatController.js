@@ -1,5 +1,17 @@
 const { Chat, User, Message, ChatParticipant, MessageReceipt, GroupInvite, UserMessageDeletion } = require('../models');
 const { Op } = require('sequelize');
+const {
+  isAdminRole,
+  DEFAULT_GROUP_SETTINGS,
+  groupSettingsOf,
+  getIO,
+  emitToUsers,
+  joinChatRoom,
+  leaveChatRoom,
+  activeMemberIds,
+  postSystemMessage,
+  broadcastGroupUpdate,
+} = require('../services/groupEvents');
 
 const createChat = async (req, res) => {
   // ✅ Use transaction for data consistency
@@ -129,6 +141,9 @@ const createChat = async (req, res) => {
       createdBy: userId,
       lastActivityAt: new Date()
     };
+    if (isGroup) {
+      chatData.settings = { ...DEFAULT_GROUP_SETTINGS };
+    }
 
     // For direct chats, set participant IDs
     if (!isGroup) {
@@ -146,9 +161,8 @@ const createChat = async (req, res) => {
       isActive: true
     }, { transaction });
 
-    // Add other participants
-    for (const participantId of participantIds) {
-      // Skip if participant is the creator (avoid duplicates)
+    // Add other participants (deduplicated; the creator is already added)
+    for (const participantId of [...new Set(participantIds)]) {
       if (participantId !== userId) {
         await ChatParticipant.create({
           userId: participantId,
@@ -193,6 +207,10 @@ const createChat = async (req, res) => {
     });
 
     console.log(`✅ Created chat ${chat.id} with ${completeChat.participants?.length || 0} participants`);
+
+    if (isGroup) {
+      await announceNewGroup(req, chat, [userId, ...participantIds]);
+    }
 
     res.status(201).json({ chat: completeChat });
   } catch (error) {
@@ -533,30 +551,41 @@ const updateGroupInfo = async (req, res) => {
     const { name, description, avatar } = req.body;
     const userId = req.user.id;
 
-    // Verify user is admin
     const participant = await ChatParticipant.findOne({
-      where: {
-        userId,
-        chatId,
-        isActive: true,
-        role: { [Op.in]: ['admin', 'moderator'] }
-      }
+      where: { userId, chatId, isActive: true }
     });
-
-    if (!participant) {
-      return res.status(403).json({ error: 'Permission denied' });
-    }
 
     const chat = await Chat.findByPk(chatId);
     if (!chat || !chat.isGroup) {
       return res.status(404).json({ error: 'Group not found' });
     }
 
+    // Admins can always edit; members only when the group allows it
+    const canEdit = participant && (isAdminRole(participant.role) || groupSettingsOf(chat).allowMembersToEditGroupInfo);
+    if (!canEdit) {
+      return res.status(403).json({ error: 'Only admins can edit the group info' });
+    }
+
+    const before = { name: chat.name, description: chat.description, avatar: chat.avatar };
     await chat.update({
-      name: name || chat.name,
+      name: name ? String(name).trim().slice(0, 50) : chat.name,
       description: description !== undefined ? description : chat.description,
       avatar: avatar !== undefined ? avatar : chat.avatar
     });
+
+    const io = getIO(req);
+    const actor = await User.findByPk(userId, { attributes: ['username'] });
+    const actorName = actor?.username || 'Someone';
+    if (chat.name !== before.name) {
+      await postSystemMessage(io, chatId, userId, `${actorName} renamed the group to "${chat.name}"`, { type: 'info_changed', key: 'name' });
+    }
+    if (chat.avatar !== before.avatar) {
+      await postSystemMessage(io, chatId, userId, chat.avatar ? `${actorName} changed the group photo` : `${actorName} removed the group photo`, { type: 'info_changed', key: 'avatar' });
+    }
+    if ((chat.description || '') !== (before.description || '')) {
+      await postSystemMessage(io, chatId, userId, `${actorName} updated the group description`, { type: 'info_changed', key: 'description' });
+    }
+    await broadcastGroupUpdate(io, chatId, [], 'info_changed');
 
     // Fetch updated chat with participants
     const updatedChat = await Chat.findByPk(chatId, {
@@ -667,71 +696,104 @@ const getGroupKey = async (req, res) => {
 
 // Create group with encrypted keys
 const createGroupWithKeys = async (req, res) => {
+  const sequelize = require('../config/database');
+  const { GroupChatKey } = require('../models');
+  let transaction;
   try {
     const { name, description, participantIds, encryptedGroupKeys } = req.body;
     const userId = req.user.id;
-    
-    if (!name || !participantIds || !encryptedGroupKeys) {
+
+    if (!name || !Array.isArray(participantIds) || !Array.isArray(encryptedGroupKeys)) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
-    
-    // Create group chat
+
+    // Clients have sent the creator inside participantIds (and twice in the key
+    // list). The duplicate key row hit the unique index after the chat was
+    // already saved, so the app saw an error for a group that did exist.
+    const memberIds = [...new Set(participantIds)].filter(id => id && id !== userId);
+    if (memberIds.length === 0) {
+      return res.status(400).json({ error: 'A group needs at least one other member' });
+    }
+    const keysByUser = new Map();
+    for (const keyData of encryptedGroupKeys) {
+      if (keyData?.userId && keyData?.encryptedKey) keysByUser.set(keyData.userId, keyData);
+    }
+
+    transaction = await sequelize.transaction();
+
     const chat = await Chat.create({
-      name,
+      name: String(name).trim().slice(0, 50),
       description,
       isGroup: true,
       createdBy: userId,
-      lastActivityAt: new Date()
-    });
-    
-    // Add creator as admin
+      lastActivityAt: new Date(),
+      settings: { ...DEFAULT_GROUP_SETTINGS }
+    }, { transaction });
+
     await ChatParticipant.create({
       chatId: chat.id,
       userId,
       role: 'admin',
       isActive: true
-    });
-    
-    // Add other participants
-    for (const participantId of participantIds) {
-      if (participantId !== userId) {
-        await ChatParticipant.create({
-          chatId: chat.id,
-          userId: participantId,
-          role: 'member',
-          isActive: true
-        });
-      }
+    }, { transaction });
+
+    for (const participantId of memberIds) {
+      await ChatParticipant.create({
+        chatId: chat.id,
+        userId: participantId,
+        role: 'member',
+        isActive: true
+      }, { transaction });
     }
-    
-    // Store encrypted group keys for each member
-    const { GroupChatKey } = require('../models');
-    for (const keyData of encryptedGroupKeys) {
+
+    for (const keyData of keysByUser.values()) {
+      if (keyData.userId !== userId && !memberIds.includes(keyData.userId)) continue;
       await GroupChatKey.create({
         chatId: chat.id,
         userId: keyData.userId,
         encryptedGroupKey: keyData.encryptedKey,
         keyVersion: keyData.keyVersion || 1
-      });
+      }, { transaction });
     }
-    
-    // Fetch complete chat data
+
+    await transaction.commit();
+    transaction = null;
+
     const completeChat = await Chat.findByPk(chat.id, {
       include: [{
         model: User,
         as: 'participants',
         attributes: ['id', 'username', 'avatar', 'isOnline', 'publicKey'],
-        through: { where: { isActive: true } }
+        through: { where: { isActive: true }, attributes: ['role', 'joinedAt'] }
       }]
     });
-    
-    res.status(201).json({ 
-      success: true, 
-      chat: completeChat 
+
+    await announceNewGroup(req, chat, [userId, ...memberIds]);
+
+    res.status(201).json({
+      success: true,
+      chat: completeChat
     });
   } catch (error) {
+    if (transaction) await transaction.rollback();
     console.error('Create group with keys error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to create group' });
+  }
+};
+
+// Put every member's sockets in the new room, drop a "created the group"
+// entry in the timeline, and tell the other members' chat lists about it.
+const announceNewGroup = async (req, chat, memberIds) => {
+  try {
+    const io = getIO(req);
+    joinChatRoom(io, memberIds, chat.id);
+    const creator = await User.findByPk(req.user.id, { attributes: ['username'] });
+    await postSystemMessage(io, chat.id, req.user.id, `${creator?.username || 'Someone'} created the group "${chat.name}"`, {
+      type: 'group_created'
+    });
+    emitToUsers(io, memberIds.filter(id => id !== req.user.id), 'group_added', { chatId: chat.id });
+  } catch (error) {
+    console.error('Announce new group error:', error.message);
   }
 };
 
@@ -959,9 +1021,10 @@ const deleteChat = async (req, res) => {
 
     if (chat.isGroup) {
       // For groups, check if user is admin
-      if (participant.role !== 'admin') {
+      if (!isAdminRole(participant.role)) {
         return res.status(403).json({ error: 'Only admins can delete groups' });
       }
+      const memberIdsBeforeDelete = await activeMemberIds(chatId);
 
       // ✅ NEW: Mark all messages as deleted for the admin who is deleting the group
       const messages = await Message.findAll({
@@ -994,6 +1057,12 @@ const deleteChat = async (req, res) => {
 
       // ✅ Soft delete the chat
       await chat.update({ isActive: false });
+
+      const io = getIO(req);
+      emitToUsers(io, memberIdsBeforeDelete.filter(id => id !== userId), 'group_removed', {
+        chatId, reason: 'deleted', groupName: chat.name
+      });
+      leaveChatRoom(io, memberIdsBeforeDelete, chatId);
 
       console.log(`🗑️ Group ${chatId} soft-deleted by admin ${userId}`);
     } else {
@@ -1092,15 +1161,15 @@ const leaveGroup = async (req, res) => {
     }
 
     // Mark participant as inactive
-    await participant.update({ isActive: false });
+    await participant.update({ isActive: false, leftAt: new Date() });
 
     // If user was admin, check if there are other admins
-    if (participant.role === 'admin') {
+    if (isAdminRole(participant.role)) {
       const otherAdmins = await ChatParticipant.count({
         where: {
           chatId,
           isActive: true,
-          role: 'admin'
+          role: { [Op.in]: ['admin', 'moderator'] }
         }
       });
 
@@ -1120,6 +1189,12 @@ const leaveGroup = async (req, res) => {
         }
       }
     }
+
+    const io = getIO(req);
+    leaveChatRoom(io, [userId], chatId);
+    const leaver = await User.findByPk(userId, { attributes: ['username'] });
+    await postSystemMessage(io, chatId, userId, `${leaver?.username || 'Someone'} left`, { type: 'member_left', userId });
+    await broadcastGroupUpdate(io, chatId, [], 'member_left');
 
     console.log(`User ${userId} left group ${chatId}`);
     res.json({ success: true });
@@ -1152,21 +1227,31 @@ const updateChatSettings = async (req, res) => {
       return res.status(404).json({ error: 'Chat not found or access denied' });
     }
 
-    // Update settings
+    // Mute is personal: it lives on this user's participant row, not on the
+    // shared chat settings (which would mute the chat for everyone).
+    if (muteNotifications !== undefined) {
+      await ChatParticipant.update(
+        { isMuted: !!muteNotifications, mutedUntil: null },
+        { where: { chatId, userId } }
+      );
+    }
+
     const currentSettings = chat.settings || {};
+    const { muteNotifications: _sharedMute, ...sharedSettings } = currentSettings;
     const newSettings = {
-      ...currentSettings,
-      ...(muteNotifications !== undefined && { muteNotifications }),
+      ...sharedSettings,
       ...(disappearingMessages !== undefined && { disappearingMessages }),
       ...(disappearingMessagesDuration !== undefined && { disappearingMessagesDuration })
     };
 
-    await chat.update({ settings: newSettings });
+    if (disappearingMessages !== undefined || disappearingMessagesDuration !== undefined) {
+      await chat.update({ settings: newSettings });
+    }
 
     res.json({
       success: true,
       message: 'Chat settings updated successfully',
-      settings: newSettings
+      settings: { ...newSettings, muteNotifications: muteNotifications !== undefined ? !!muteNotifications : undefined }
     });
   } catch (error) {
     console.error('Error updating chat settings:', error);
@@ -1196,14 +1281,19 @@ const getChatSettings = async (req, res) => {
       return res.status(404).json({ error: 'Chat not found or access denied' });
     }
 
+    const me = await ChatParticipant.findOne({ where: { chatId, userId } });
+    const isMuted = !!me?.isMuted && (!me.mutedUntil || new Date(me.mutedUntil) > new Date());
+
     res.json({
       success: true,
-      settings: chat.settings || {
+      settings: {
         allowMembersToAddOthers: false,
         allowMembersToEditGroupInfo: false,
-        muteNotifications: false,
         disappearingMessages: false,
-        disappearingMessagesDuration: null
+        disappearingMessagesDuration: null,
+        ...(chat.settings || {}),
+        muteNotifications: isMuted,
+        mutedUntil: isMuted ? me.mutedUntil : null
       }
     });
   } catch (error) {

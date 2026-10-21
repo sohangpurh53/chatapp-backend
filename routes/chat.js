@@ -29,6 +29,15 @@ router.post('/:chatId/invite', authenticateToken, inviteToGroup);
 router.post('/invites/:inviteId/respond', authenticateToken, respondToGroupInvite);
 router.put('/:chatId/info', authenticateToken, updateGroupInfo);
 
+// Group administration
+const groupController = require('../controllers/groupController');
+router.get('/:chatId/group', authenticateToken, groupController.getGroupDetails);
+router.post('/:chatId/members', authenticateToken, groupController.addMembers);
+router.delete('/:chatId/members/:userId', authenticateToken, groupController.removeMember);
+router.put('/:chatId/members/:userId/role', authenticateToken, groupController.updateMemberRole);
+router.put('/:chatId/group-settings', authenticateToken, groupController.updateGroupSettings);
+router.put('/:chatId/mute', authenticateToken, groupController.muteGroup);
+
 // Message management routes
 router.post('/messages/:messageId/read', authenticateToken, markMessageAsRead);
 
