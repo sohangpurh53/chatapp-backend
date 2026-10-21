@@ -150,30 +150,38 @@ router.post('/device-heartbeat', authenticateToken, async (req, res) => {
   }
 });
 
+const PREFERENCE_KEYS = ['calls', 'messages', 'groupMessages', 'soundEnabled', 'vibrationEnabled', 'readReceipts'];
+const DEFAULT_PREFERENCES = {
+  calls: true,
+  messages: true,
+  groupMessages: true,
+  soundEnabled: true,
+  vibrationEnabled: true,
+  readReceipts: true
+};
+
 /**
- * Update notification preferences
+ * Update notification / privacy preferences (partial update: only the keys sent change)
  * PUT /api/notifications/preferences
  */
 router.put('/preferences', authenticateToken, async (req, res) => {
   try {
-    const { calls, messages, groupMessages, soundEnabled, vibrationEnabled } = req.body;
+    const user = await User.findByPk(req.user.id, { attributes: ['id', 'notificationPreferences'] });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    await User.update(
-      {
-        notificationPreferences: {
-          calls: calls !== undefined ? calls : true,
-          messages: messages !== undefined ? messages : true,
-          groupMessages: groupMessages !== undefined ? groupMessages : true,
-          soundEnabled: soundEnabled !== undefined ? soundEnabled : true,
-          vibrationEnabled: vibrationEnabled !== undefined ? vibrationEnabled : true
-        }
-      },
-      { where: { id: req.user.id } }
-    );
+    const preferences = { ...DEFAULT_PREFERENCES, ...(user.notificationPreferences || {}) };
+    for (const key of PREFERENCE_KEYS) {
+      if (typeof req.body?.[key] === 'boolean') preferences[key] = req.body[key];
+    }
+
+    await User.update({ notificationPreferences: preferences }, { where: { id: req.user.id } });
 
     res.json({
       success: true,
-      message: 'Notification preferences updated'
+      message: 'Notification preferences updated',
+      preferences
     });
   } catch (error) {
     console.error('Update preferences error:', error);
@@ -182,7 +190,7 @@ router.put('/preferences', authenticateToken, async (req, res) => {
 });
 
 /**
- * Get notification preferences
+ * Get notification / privacy preferences
  * GET /api/notifications/preferences
  */
 router.get('/preferences', authenticateToken, async (req, res) => {
@@ -197,13 +205,7 @@ router.get('/preferences', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      preferences: user.notificationPreferences || {
-        calls: true,
-        messages: true,
-        groupMessages: true,
-        soundEnabled: true,
-        vibrationEnabled: true
-      }
+      preferences: { ...DEFAULT_PREFERENCES, ...(user.notificationPreferences || {}) }
     });
   } catch (error) {
     console.error('Get preferences error:', error);

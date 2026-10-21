@@ -699,12 +699,23 @@ class SocketHandlers {
         }
       );
 
-      // Notify sender that message was read
-      socket.to(`chat_${chatId}`).emit('message_read', {
-        messageId,
-        readBy: socket.userId,
-        readAt: new Date()
+      // Tell the others it was read, unless the reader turned read receipts off.
+      // Members who turned them off themselves don't see others' read ticks either.
+      const { readReceiptsEnabled, usersWithReadReceiptsOff } = require('../services/readReceipts');
+      if (!(await readReceiptsEnabled(socket.userId))) {
+        return;
+      }
+      const others = await ChatParticipant.findAll({
+        where: { chatId, isActive: true, userId: { [Op.ne]: socket.userId } },
+        attributes: ['userId']
       });
+      const hidden = await usersWithReadReceiptsOff(others.map(p => p.userId));
+      const payload = { messageId, chatId, readBy: socket.userId, readAt: new Date() };
+      for (const { userId } of others) {
+        if (!hidden.has(userId)) {
+          this.io.to(`user_${userId}`).emit('message_read', payload);
+        }
+      }
 
     } catch (error) {
       console.error('Message read error:', error);

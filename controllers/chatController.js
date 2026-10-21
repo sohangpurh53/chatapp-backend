@@ -407,6 +407,10 @@ const getChatMessages = async (req, res) => {
       return messageData;
     }));
 
+    // Respect read-receipt privacy (reader's and viewer's)
+    const { maskReadReceipts } = require('../services/readReceipts');
+    await maskReadReceipts(processedMessages, userId);
+
     res.json({ messages: processedMessages.reverse() });
   } catch (error) {
     console.error('Get chat messages error:', error);

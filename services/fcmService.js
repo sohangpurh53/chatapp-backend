@@ -174,7 +174,7 @@ class FCMService {
       const { fcmToken, deviceId, deviceName, notificationPreferences } = tokenInfo;
       // Check notification preferences for this device
       const prefs = notificationPreferences || {};
-      if (!this.shouldSendNotification(notification.type, prefs)) {
+      if (!this.shouldSendNotification(notification.type, prefs, notification.data)) {
         console.log(`⚠️  Notification disabled by device preferences for user ${userId} device ${deviceId}`);
         return { success: false, reason: 'disabled_by_user', deviceId };
       }
@@ -182,7 +182,9 @@ class FCMService {
       // Prepare data payload - all values must be strings
       const dataPayload = {
         type: notification.type,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        soundEnabled: prefs.soundEnabled === false ? 'false' : 'true',
+        vibrationEnabled: prefs.vibrationEnabled === false ? 'false' : 'true'
       };
 
       // Convert notification.data to strings - FCM requires all data values to be strings
@@ -240,7 +242,7 @@ class FCMService {
           ...(!isDataOnly && {
             notification: {
               sound: prefs.soundEnabled !== false ? 'default' : undefined,
-              channelId: this.getChannelId(notification?.data?.type),
+              channelId: this.getChannelId(notification?.data?.type || notification.type, prefs),
               // ✅ Only use valid FCM notification properties
               defaultVibrateTimings: prefs.vibrationEnabled !== false
             }
@@ -338,7 +340,7 @@ class FCMService {
   /**
    * Check if notification should be sent based on user preferences
    */
-  shouldSendNotification(type, preferences) {
+  shouldSendNotification(type, preferences, data = {}) {
     switch (type) {
       case 'incoming_call':
       case 'incoming_call_with_signal':
@@ -347,7 +349,10 @@ class FCMService {
       case 'call_ended':
         return preferences.calls !== false;
       case 'new_message':
-        return preferences.messages !== false;
+        if (preferences.messages === false) return false;
+        // Group chats have their own switch
+        if (String(data?.isGroup) === 'true' && preferences.groupMessages === false) return false;
+        return true;
       default:
         return true;
     }
@@ -356,7 +361,18 @@ class FCMService {
   /**
    * Get Android notification channel ID
    */
-  getChannelId(type) {
+  getChannelId(type, prefs = {}) {
+    if (type === 'new_message') {
+      // Android fixes sound/vibration per channel, so each combination has its
+      // own channel (the app creates the same four on startup, see
+      // ChatApp/src/services/message-notification.ts).
+      const sound = prefs.soundEnabled !== false;
+      const vibrate = prefs.vibrationEnabled !== false;
+      if (sound && vibrate) return 'chat_messages';
+      if (sound) return 'chat_messages_no_vibration';
+      if (vibrate) return 'chat_messages_no_sound';
+      return 'chat_messages_silent';
+    }
     switch (type) {
       case 'incoming_call':
       case 'incoming_call_with_signal':

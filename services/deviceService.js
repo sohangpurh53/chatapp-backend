@@ -187,11 +187,16 @@ class DeviceService {
         attributes: ['fcmToken', 'deviceId', 'deviceName', 'notificationPreferences']
       });
 
+      // The Settings screen saves preferences on the account; they override the
+      // per-device copies made at registration (which were never updated).
+      const user = await User.findByPk(userId, { attributes: ['notificationPreferences'] });
+      const accountPreferences = user?.notificationPreferences || {};
+
       return devices.map(device => ({
         fcmToken: device.fcmToken,
         deviceId: device.deviceId,
         deviceName: device.deviceName,
-        notificationPreferences: device.notificationPreferences
+        notificationPreferences: { ...(device.notificationPreferences || {}), ...accountPreferences }
       }));
     } catch (error) {
       console.error('Error fetching FCM tokens:', error);
