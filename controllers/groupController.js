@@ -156,7 +156,8 @@ const addMembers = async (req, res) => {
         await ChatParticipant.create({ chatId: chat.id, userId, role: 'member', isActive: true }, { transaction });
       }
 
-      if (m.encryptedGroupKey) {
+      // Only a copy of the current key version is useful to a new member
+      if (m.encryptedGroupKey && (m.keyVersion === undefined || Number(m.keyVersion) === keyVersion)) {
         await GroupChatKey.destroy({ where: { chatId: chat.id, userId, keyVersion }, transaction });
         await GroupChatKey.create({
           chatId: chat.id,
@@ -216,8 +217,11 @@ const removeMember = async (req, res) => {
     }
 
     await target.update({ isActive: false, leftAt: new Date(), role: 'member' });
-    // Without a key row the removed user can no longer fetch the group key.
+    // Without a key row the removed user can no longer fetch the group key, and
+    // the next member to send rotates it, so they can't read new messages with
+    // the key they already had.
     await GroupChatKey.destroy({ where: { chatId: chat.id, userId: targetId } });
+    await chat.update({ settings: { ...(chat.settings || {}), keyRotationNeeded: true } });
 
     leaveChatRoom(io, [targetId], chat.id);
     emitToUsers(io, [targetId], 'group_removed', { chatId: chat.id, reason: 'removed', groupName: chat.name });

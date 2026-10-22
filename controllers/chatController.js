@@ -663,34 +663,43 @@ const markMessageAsRead = async (req, res) => {
 };
 
 // Get encrypted group key for current user
+// Every key version this member holds. Messages record the version they were
+// encrypted with, so history stays readable after the key is rotated.
 const getGroupKey = async (req, res) => {
   try {
     const { chatId } = req.params;
     const userId = req.user.id;
-    
+
     // Verify user is member of the group
     const participant = await ChatParticipant.findOne({
       where: { chatId, userId, isActive: true }
     });
-    
+
     if (!participant) {
       return res.status(403).json({ error: 'Not a member of this group' });
     }
-    
-    // Get encrypted group key for this user
+
     const { GroupChatKey } = require('../models');
-    const groupKey = await GroupChatKey.findOne({
+    const rows = await GroupChatKey.findAll({
       where: { chatId, userId },
-      order: [['keyVersion', 'DESC']]
+      order: [['keyVersion', 'ASC']]
     });
-    
-    if (!groupKey) {
+
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'Group key not found' });
     }
-    
+
+    const latest = await GroupChatKey.max('keyVersion', { where: { chatId } });
+    const chat = await Chat.findByPk(chatId, { attributes: ['settings'] });
+    const mine = rows[rows.length - 1];
+
     res.json({
-      encryptedGroupKey: groupKey.encryptedGroupKey,
-      keyVersion: groupKey.keyVersion
+      keys: rows.map(r => ({ keyVersion: r.keyVersion, encryptedGroupKey: r.encryptedGroupKey })),
+      currentVersion: latest || mine.keyVersion,
+      rotationNeeded: !!chat?.settings?.keyRotationNeeded,
+      // Latest key this member holds (older clients read only these two fields)
+      encryptedGroupKey: mine.encryptedGroupKey,
+      keyVersion: mine.keyVersion
     });
   } catch (error) {
     console.error('Get group key error:', error);
@@ -1167,6 +1176,12 @@ const leaveGroup = async (req, res) => {
     // Mark participant as inactive
     await participant.update({ isActive: false, leftAt: new Date() });
 
+    // They keep what they already read, but must not be able to read what comes
+    // next: drop their key copies and have the remaining members rotate the key
+    const { GroupChatKey } = require('../models');
+    await GroupChatKey.destroy({ where: { chatId, userId } });
+    await chat.update({ settings: { ...(chat.settings || {}), keyRotationNeeded: true } });
+
     // If user was admin, check if there are other admins
     if (isAdminRole(participant.role)) {
       const otherAdmins = await ChatParticipant.count({
@@ -1368,55 +1383,68 @@ const clearChat = async (req, res) => {
   }
 };
 
-// Rotate group key (when member is removed or for security)
+// Rotate the group key: a new version for the current members. Old versions are
+// kept so earlier messages stay readable; people who left never receive the new
+// one. After someone leaves or is removed any member may rotate (the next one to
+// send does it automatically); otherwise only admins.
+// Body: { encryptedGroupKeys: [{ userId, encryptedKey }], keyVersion }
 const rotateGroupKey = async (req, res) => {
+  const sequelize = require('../config/database');
+  const { GroupChatKey } = require('../models');
+  let transaction;
   try {
     const { chatId } = req.params;
-    const { encryptedGroupKeys } = req.body;
+    const { encryptedGroupKeys, keyVersion } = req.body || {};
     const userId = req.user.id;
-    
-    // Verify user is admin
-    const participant = await ChatParticipant.findOne({
-      where: {
-        userId,
-        chatId,
-        isActive: true,
-        role: { [Op.in]: ['admin', 'moderator'] }
-      }
-    });
-    
+
+    const participant = await ChatParticipant.findOne({ where: { userId, chatId, isActive: true } });
     if (!participant) {
+      return res.status(403).json({ error: 'Not a member of this group' });
+    }
+    const chat = await Chat.findByPk(chatId);
+    if (!chat?.isGroup) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+    if (!chat.settings?.keyRotationNeeded && !isAdminRole(participant.role)) {
       return res.status(403).json({ error: 'Permission denied' });
     }
-    
-    // Get current key version
-    const { GroupChatKey } = require('../models');
-    const currentKey = await GroupChatKey.findOne({
-      where: { chatId },
-      order: [['keyVersion', 'DESC']]
-    });
-    
-    const newVersion = (currentKey?.keyVersion || 1) + 1;
-    
-    // Delete old keys
-    await GroupChatKey.destroy({ where: { chatId } });
-    
-    // Store new encrypted group keys
-    for (const keyData of encryptedGroupKeys) {
-      await GroupChatKey.create({
-        chatId,
-        userId: keyData.userId,
-        encryptedGroupKey: keyData.encryptedKey,
-        keyVersion: newVersion
-      });
+
+    const current = (await GroupChatKey.max('keyVersion', { where: { chatId } })) || 1;
+    const newVersion = current + 1;
+    // Someone else rotated first: the client refetches and uses theirs
+    if (keyVersion !== undefined && Number(keyVersion) !== newVersion) {
+      return res.status(409).json({ error: 'Group key already rotated', code: 'KEY_VERSION_CONFLICT', currentVersion: current });
     }
-    
-    res.json({ 
-      success: true, 
+
+    // The new key must reach every current member, and nobody else
+    const memberIds = await activeMemberIds(chatId);
+    const provided = new Map((Array.isArray(encryptedGroupKeys) ? encryptedGroupKeys : [])
+      .filter(k => k?.userId && k?.encryptedKey)
+      .map(k => [k.userId, k.encryptedKey]));
+    const missing = memberIds.filter(id => !provided.has(id));
+    const outsiders = [...provided.keys()].filter(id => !memberIds.includes(id));
+    if (missing.length > 0 || outsiders.length > 0) {
+      return res.status(400).json({ error: 'Key set does not match the current members', code: 'KEY_MEMBERS_MISMATCH', missing, outsiders });
+    }
+
+    transaction = await sequelize.transaction();
+    for (const [memberId, encryptedKey] of provided) {
+      await GroupChatKey.create({ chatId, userId: memberId, encryptedGroupKey: encryptedKey, keyVersion: newVersion }, { transaction });
+    }
+    const { keyRotationNeeded, ...settings } = chat.settings || {};
+    await chat.update({ settings }, { transaction });
+    await transaction.commit();
+    transaction = null;
+
+    await broadcastGroupUpdate(getIO(req), chatId, [], 'key_rotated');
+
+    res.json({
+      success: true,
       message: 'Group key rotated successfully',
       keyVersion: newVersion
     });
   } catch (error) {
+    if (transaction) await transaction.rollback();
     console.error('Rotate group key error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
