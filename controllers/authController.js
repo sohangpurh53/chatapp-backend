@@ -3,15 +3,17 @@ const { OAuth2Client } = require('google-auth-library');
 const { User, EncryptionSession } = require('../models');
 const { Op } = require('sequelize');
 const encryptionService = require('../services/encryptionService');
+const sessionService = require('../services/sessionService');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-const generateToken = (userId) => {
-  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
+// `sid` ties both tokens to a UserSession row, so a device can be signed out remotely
+const generateToken = (userId, sid) => {
+  return jwt.sign({ userId, ...(sid && { sid }) }, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
 
-const generateRefreshToken = (userId) => {
-  return jwt.sign({ userId, type: 'refresh' }, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh', { expiresIn: '30d' });
+const generateRefreshToken = (userId, sid) => {
+  return jwt.sign({ userId, type: 'refresh', ...(sid && { sid }) }, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh', { expiresIn: '30d' });
 };
 
 const register = async (req, res) => {
@@ -76,8 +78,9 @@ const register = async (req, res) => {
 
     const user = await User.create(userData);
 
-    const token = generateToken(user.id);
-    const refreshToken = generateRefreshToken(user.id);
+    const session = await sessionService.createSession(user.id, req);
+    const token = generateToken(user.id, session.id);
+    const refreshToken = generateRefreshToken(user.id, session.id);
 
     // Create encryption session if keys were provided
     let encryptionSession = null;
@@ -142,8 +145,9 @@ const login = async (req, res) => {
     // Update user online status
     await user.update({ isOnline: true, lastSeen: new Date() });
 
-    const token = generateToken(user.id);
-    const refreshToken = generateRefreshToken(user.id);
+    const session = await sessionService.createSession(user.id, req);
+    const token = generateToken(user.id, session.id);
+    const refreshToken = generateRefreshToken(user.id, session.id);
 
     // Create encryption session if user has encryption enabled
     let encryptionSession = null;
@@ -248,8 +252,9 @@ const googleLogin = async (req, res) => {
 
     await user.update({ isOnline: true, lastSeen: new Date() });
 
-    const token = generateToken(user.id);
-    const refreshToken = generateRefreshToken(user.id);
+    const session = await sessionService.createSession(user.id, req);
+    const token = generateToken(user.id, session.id);
+    const refreshToken = generateRefreshToken(user.id, session.id);
 
     let encryptionSession = null;
     if (user.encryptionEnabled) {
@@ -321,11 +326,10 @@ const logout = async (req, res) => {
       lastSeen: new Date()
     });
 
-    // Deactivate all encryption sessions for this user
-    await EncryptionSession.update(
-      { isActive: false },
-      { where: { userId: req.user.id, isActive: true } }
-    );
+    // Sign out this device only; the user's other devices stay signed in
+    if (req.sessionId) {
+      await sessionService.revokeById(req.user.id, req.sessionId, 'logout');
+    }
 
     res.json({ message: 'Logout successful' });
   } catch (error) {
@@ -659,6 +663,48 @@ const getEncryptionStats = async (req, res) => {
   }
 };
 
+// GET /auth/sessions: signed-in devices, current one first
+const getSessions = async (req, res) => {
+  try {
+    const sessions = await sessionService.listSessions(req.user.id);
+    const list = sessions
+      .map(s => ({ ...s.toJSON(), isCurrent: s.id === req.sessionId }))
+      .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent));
+    res.json({ sessions: list, maxSessions: sessionService.MAX_ACTIVE_SESSIONS, currentSessionId: req.sessionId || null });
+  } catch (error) {
+    console.error('Get sessions error:', error);
+    res.status(500).json({ error: 'Failed to load devices' });
+  }
+};
+
+// DELETE /auth/sessions/:sessionId: sign out another device
+const revokeSession = async (req, res) => {
+  try {
+    if (req.params.sessionId === req.sessionId) {
+      return res.status(400).json({ error: 'Use Log out to sign out of this device' });
+    }
+    const revoked = await sessionService.revokeById(req.user.id, req.params.sessionId, 'remote');
+    if (!revoked) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Revoke session error:', error);
+    res.status(500).json({ error: 'Failed to sign out device' });
+  }
+};
+
+// POST /auth/sessions/revoke-others: sign out every device except this one
+const revokeOtherSessions = async (req, res) => {
+  try {
+    const count = await sessionService.revokeOthers(req.user.id, req.sessionId);
+    res.json({ success: true, revokedCount: count });
+  } catch (error) {
+    console.error('Revoke other sessions error:', error);
+    res.status(500).json({ error: 'Failed to sign out other devices' });
+  }
+};
+
 const refreshToken = async (req, res) => {
   try {
     const { refreshToken: token } = req.body;
@@ -685,8 +731,19 @@ const refreshToken = async (req, res) => {
       return res.status(401).json({ error: 'User not found' });
     }
 
-    const newAccessToken = generateToken(user.id);
-    const newRefreshToken = generateRefreshToken(user.id);
+    // Signed out from another device: no new tokens. Older tokens without a
+    // session are moved onto one now, so they can be managed from then on.
+    let sid = decoded.sid;
+    if (sid) {
+      if (!(await sessionService.validateSession(sid, user.id))) {
+        return res.status(401).json({ error: 'This device was signed out', code: 'SESSION_REVOKED' });
+      }
+    } else {
+      sid = (await sessionService.createSession(user.id, req)).id;
+    }
+
+    const newAccessToken = generateToken(user.id, sid);
+    const newRefreshToken = generateRefreshToken(user.id, sid);
 
     res.json({
       token: newAccessToken,
@@ -705,6 +762,9 @@ module.exports = {
   getVibes,
   logout,
   refreshToken,
+  getSessions,
+  revokeSession,
+  revokeOtherSessions,
   getProfile,
   updateProfile,
   getUserPublicKey,

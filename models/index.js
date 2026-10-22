@@ -11,6 +11,7 @@ const UserMessageDeletion = require('./UserMessageDeletion');
 const Notification = require('./Notification');
 const UserDevice = require('./UserDevice');
 const EncryptionSession = require('./EncryptionSession');
+const UserSession = require('./UserSession');
 
 // User associations
 User.hasMany(Message, { foreignKey: 'senderId', as: 'sentMessages' });
@@ -98,6 +99,10 @@ Notification.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 User.hasMany(UserDevice, { foreignKey: 'userId', as: 'devices' });
 UserDevice.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
+// Signed-in sessions (one per device login)
+User.hasMany(UserSession, { foreignKey: 'userId', as: 'sessions' });
+UserSession.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
 // EncryptionSession associations
 User.hasMany(EncryptionSession, { foreignKey: 'userId', as: 'encryptionSessions' });
 EncryptionSession.belongsTo(User, { foreignKey: 'userId', as: 'user' });
@@ -115,5 +120,6 @@ module.exports = {
   UserMessageDeletion,
   Notification,
   UserDevice,
+  UserSession,
   EncryptionSession
 };

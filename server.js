@@ -47,6 +47,7 @@ setupSocketAdapter(io);
 
 // Controllers push real-time group updates through this
 app.set('io', io);
+require('./services/sessionService').setIO(io);
 
 // Middleware
 app.use(cors());
@@ -98,7 +99,8 @@ io.use(async (socket, next) => {
     
     // Use the authenticateSocket middleware
     await authenticateSocket(socket, next);
-    console.log(`[SOCKET AUTH] User ${socket.user.username} (${socket.userId}) authenticated`);
+    // authenticateSocket already called next(err) when it rejected the socket
+    if (socket.user) console.log(`[SOCKET AUTH] User ${socket.user.username} (${socket.userId}) authenticated`);
   } catch (error) {
     console.error('[SOCKET AUTH] Authentication failed:', error.message);
     next(new Error('Authentication failed'));

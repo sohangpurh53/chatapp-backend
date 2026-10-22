@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { User } = require('../models');
+const sessionService = require('../services/sessionService');
 
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -11,13 +12,20 @@ const authenticateToken = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Tokens from a signed-out device stop working immediately
+    if (decoded.sid && !(await sessionService.validateSession(decoded.sid, decoded.userId))) {
+      return res.status(401).json({ error: 'This device was signed out', code: 'SESSION_REVOKED' });
+    }
+
     const user = await User.findByPk(decoded.userId);
-    
+
     if (!user) {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
     req.user = user;
+    req.sessionId = decoded.sid || null;
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
@@ -36,14 +44,18 @@ const authenticateSocket = async (socket, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.sid && !(await sessionService.validateSession(decoded.sid, decoded.userId))) {
+      return next(new Error('Session revoked'));
+    }
     const user = await User.findByPk(decoded.userId);
-    
+
     if (!user) {
       return next(new Error('Authentication error'));
     }
 
     socket.userId = user.id;
     socket.user = user;
+    socket.sessionId = decoded.sid || null;
     next();
   } catch (error) {
     next(new Error('Authentication error'));

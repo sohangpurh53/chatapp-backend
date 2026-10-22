@@ -39,6 +39,8 @@ class SocketHandlers {
 
     // Personal room: lets REST controllers reach this user on any server instance
     socket.join(`user_${socket.userId}`);
+    // Session room: signing this device out reaches (and disconnects) only its sockets
+    if (socket.sessionId) socket.join(`session_${socket.sessionId}`);
 
     // Join user to their chat rooms
     this.joinUserChats(socket);

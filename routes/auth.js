@@ -24,6 +24,9 @@ router.post('/login', login);
 router.post('/google', googleLogin);
 router.post('/refresh', refreshToken); // No auth middleware - refresh token is the credential
 router.post('/logout', authenticateToken, logout);
+router.get('/sessions', authenticateToken, require('../controllers/authController').getSessions);
+router.post('/sessions/revoke-others', authenticateToken, require('../controllers/authController').revokeOtherSessions);
+router.delete('/sessions/:sessionId', authenticateToken, require('../controllers/authController').revokeSession);
 router.post('/vibes', authenticateToken, getVibes);
 router.get('/profile', authenticateToken, getProfile);
 router.put('/profile', authenticateToken, updateProfile);
