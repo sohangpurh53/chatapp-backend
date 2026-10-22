@@ -5,6 +5,8 @@ const runner = require('../services/ai/runner');
 const memory = require('../services/ai/memory');
 const actions = require('../services/ai/actions');
 const translate = require('../services/ai/translate');
+const privacy = require('../services/ai/privacy');
+const { Chat } = require('../models');
 
 // POST /ai/assist: the message assistant. It returns editable drafts and never
 // sends anything. Conversation context is decrypted on the user's phone and
@@ -20,20 +22,17 @@ const assist = async (req, res) => {
   try {
     const input = assistant.parseRequest(req.body);
 
-    if (input.chatId) {
-      const member = await ChatParticipant.findOne({
-        where: { chatId: input.chatId, userId: req.user.id, isActive: true },
-        attributes: ['id'],
-      });
-      if (!member) throw new AiError('VALIDATION_ERROR', 'You are not a member of this chat.', { status: 403 });
-    }
+    if (input.chatId) await requireMembership(input.chatId, req.user.id, { conversation: input.action === 'reply' });
 
     const { result, target } = await runner.runFeature({
       userId: req.user.id,
       feature: input.feature,
       action: input.action,
+      scope: input.action === 'reply' ? 'conversation' : 'drafts',
       signal: controller.signal,
-      build: (capabilities) => ({
+      build: (capabilities, settings) => {
+        if (input.action === 'reply') input.context = input.context.slice(-privacy.conversationCap(settings, 'replyMessages'));
+        return {
         messages: assistant.buildMessages(input, { json: capabilities.structuredOutput }),
         json: capabilities.structuredOutput,
         // Reasoning models spend part of this on thinking before they answer
@@ -41,7 +40,8 @@ const assist = async (req, res) => {
         temperature: assistant.temperatureFor(input.action),
         // Editing a chat message doesn't need long thinking; keep it quick
         lowReasoning: true,
-      }),
+        };
+      },
     });
 
     if (result.finishReason === 'length' && !result.text.trim()) {
@@ -57,7 +57,7 @@ const assist = async (req, res) => {
   } catch (error) {
     if (res.headersSent || res.destroyed) return;
     if (error instanceof AiError) {
-      return res.status(error.status).json({ error: error.message, code: error.code, ...(error.detail ? { detail: error.detail } : {}) });
+      return res.status(error.status).json(error.toResponse());
     }
     console.error('[AI] assist failed:', error?.name, redact(error?.message || ''));
     return res.status(500).json({ error: 'The AI assistant failed. Try again.' });
@@ -67,16 +67,30 @@ const assist = async (req, res) => {
 const sendFailure = (res, error, fallback) => {
   if (res.headersSent || res.destroyed) return;
   if (error instanceof AiError) {
-    res.status(error.status).json({ error: error.message, code: error.code, ...(error.detail ? { detail: error.detail } : {}) });
+    res.status(error.status).json(error.toResponse());
     return;
   }
   console.error('[AI] request failed:', error?.name, redact(error?.message || ''));
   res.status(500).json({ error: fallback });
 };
 
-const requireMembership = async (chatId, userId) => {
+/**
+ * The caller must be an active member. For conversation content (other
+ * people's messages) a group's admins can also have turned AI off.
+ */
+const requireMembership = async (chatId, userId, { conversation = true } = {}) => {
   const member = await ChatParticipant.findOne({ where: { chatId, userId, isActive: true }, attributes: ['id'] });
   if (!member) throw new AiError('VALIDATION_ERROR', 'You are not a member of this chat.', { status: 403 });
+  if (!conversation) return;
+  const chat = await Chat.findByPk(chatId, { attributes: ['id', 'isGroup', 'settings'] });
+  if (chat?.isGroup && chat.settings?.allowAiOnMessages === false) throw new AiError('GROUP_AI_DISABLED');
+};
+
+/** Keep at most as many evidence messages as the user's context level allows (newest last). */
+const capEvidence = (input, settings) => {
+  const cap = privacy.conversationCap(settings, 'evidence');
+  if (input.evidence.length > cap) input.evidence = input.evidence.slice(-cap);
+  return input;
 };
 
 // POST /ai/memory: answer a question about a chat from evidence the phone
@@ -93,9 +107,10 @@ const ask = async (req, res) => {
       userId: req.user.id,
       feature: 'memory',
       action: input.mode,
+      scope: 'conversation',
       signal: controller.signal,
-      build: (capabilities) => ({
-        messages: memory.buildMessages(input),
+      build: (capabilities, settings) => ({
+        messages: memory.buildMessages(capEvidence(input, settings)),
         json: capabilities.structuredOutput,
         maxTokens: 3000,
         temperature: 0.1,
@@ -124,9 +139,10 @@ const findActions = async (req, res) => {
       userId: req.user.id,
       feature: 'actions',
       action: 'extract',
+      scope: 'conversation',
       signal: controller.signal,
-      build: (capabilities) => ({
-        messages: actions.buildMessages(input),
+      build: (capabilities, settings) => ({
+        messages: actions.buildMessages(capEvidence(input, settings)),
         json: capabilities.structuredOutput,
         maxTokens: 3000,
         temperature: 0.1,
@@ -156,6 +172,8 @@ const translateMessages = async (req, res) => {
       userId: req.user.id,
       feature: 'translation',
       action: 'messages',
+      // Translating chat messages sends other people's words
+      scope: input.chatId ? 'conversation' : 'drafts',
       signal: controller.signal,
       build: (capabilities) => ({
         messages: translate.buildMessages(input),

@@ -11,6 +11,8 @@ const DEFAULT_GROUP_SETTINGS = {
   allowMembersToEditGroupInfo: false,
   allowMembersToAddOthers: false,
   slowModeSeconds: 0,
+  // Members may use AI features on this group's messages (admins can turn it off)
+  allowAiOnMessages: true,
 };
 
 const SLOW_MODE_OPTIONS = [0, 10, 30, 60, 300, 900];

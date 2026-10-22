@@ -25,6 +25,10 @@ const defaultSettings = () => ({
   features: Object.fromEntries(FEATURE_KEYS.map(k => [k, { enabled: true, providerId: null, model: null }])),
   limits: { dailyRequestLimit: null, monthlyTokenLimit: null, monthlyCostWarningUsd: null },
   preferredLanguage: null,
+  // How much of a conversation AI may see (services/ai/privacy CONTEXT_LEVELS)
+  contextLevel: 'standard',
+  // { [providerId]: { drafts?: {at, host, version}, conversation?: {...} } }
+  consents: {},
 });
 
 /** Stored row (or nothing) -> complete settings object with every key present. */
@@ -43,6 +47,8 @@ const normalize = (row) => {
     }])),
     limits: { ...base.limits, ...(row.limits || {}) },
     preferredLanguage: row.preferredLanguage || null,
+    contextLevel: ['off', 'minimal', 'standard'].includes(row.contextLevel) ? row.contextLevel : 'standard',
+    consents: row.consents && typeof row.consents === 'object' ? row.consents : {},
   };
 };
 
@@ -99,6 +105,14 @@ const applyUpdate = (current, patch, providerIds) => {
     }
   }
 
+  if ('contextLevel' in patch) {
+    if (!['off', 'minimal', 'standard'].includes(patch.contextLevel)) throw invalid('contextLevel must be off, minimal or standard.');
+    next.contextLevel = patch.contextLevel;
+  }
+
+  // Consents change only through POST /ai/consent and /ai/consent/revoke
+  if ('consents' in patch) throw invalid('Use the consent endpoints to change permissions.');
+
   if ('preferredLanguage' in patch) {
     const { LANGUAGES } = require('./assistant');
     const value = patch.preferredLanguage;
@@ -134,6 +148,7 @@ const withoutProvider = (settings, providerId) => {
     next.defaultProviderId = null;
     next.defaultModel = null;
   }
+  if (next.consents) delete next.consents[providerId];
   for (const key of FEATURE_KEYS) {
     if (next.features[key].providerId === providerId) {
       next.features[key].providerId = null;

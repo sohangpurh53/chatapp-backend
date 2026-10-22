@@ -46,7 +46,9 @@ Optional variables:
 | Method and path | Purpose |
 | --- | --- |
 | `GET /api/ai/config` | Settings, the user's providers, catalogue, features, server capabilities |
-| `PUT /api/ai/settings` | Partial update: `enabled`, `defaultProviderId`, `defaultModel`, `features`, `limits` |
+| `PUT /api/ai/settings` | Partial update: `enabled`, `defaultProviderId`, `defaultModel`, `features`, `limits`, `preferredLanguage`, `contextLevel` (`off`/`minimal`/`standard`) |
+| `POST /api/ai/consent` | `{ providerId, scope }` with scope `drafts` or `conversation`: the user allowed that kind of text to go to that cloud provider |
+| `POST /api/ai/consent/revoke` | `{ providerId?, scope? }`: withdraw one scope, one provider, or everything |
 | `POST /api/ai/providers` | Add a provider |
 | `PUT /api/ai/providers/:id` | Edit. Omit `apiKey` to keep the saved key; `clearApiKey: true` removes it |
 | `DELETE /api/ai/providers/:id` | Remove; settings that pointed at it are cleared |
@@ -89,9 +91,19 @@ Rate limits per user: 120 requests a minute overall, 30 writes a minute, 12 conn
 - Draft translation uses the assistant. A chat can store "their language", chosen by the user (never guessed), which adds a one-tap translate button.
 - Translation runs on the **translation** feature's provider and model, with its own rate limit (40 a minute).
 
-## Privacy note for later stages
+## Privacy controls (stage 6)
 
-AI requests go through this server: the app decrypts the text it needs on the phone and sends it to the server, which forwards it to the provider. The server and a cloud provider can read that text, so this step is not end-to-end encrypted. The app's AI settings screen says so. Consent flows come in stage 6.
+Enforced on the server (`services/ai/privacy.js`), so a modified app cannot skip them:
+
+- **Consent per cloud provider and kind of text.** Features that send the user's own typing need `drafts` consent; features that send chat messages (replies, group memory, action items, message translation) need `conversation` consent. Without it the request is refused with `CONSENT_REQUIRED` (409, with `data: { providerId, providerLabel, scope }`) and nothing is sent. The app shows a consent sheet (`components/ai/AiConsentHost`) and retries once if the user agrees. Consent is tied to the provider's host and a policy version; changing the address or the policy asks again. Self-hosted providers need no consent. Deleting a provider deletes its consents.
+- **Context level** (`contextLevel`): `standard` (15 reply messages, 120 evidence), `minimal` (5 / 20), `off` (only drafts; conversation features answer `CONTEXT_DISABLED`). The server trims evidence to the cap before anything is sent.
+- **Group policy.** A group's `settings.allowAiOnMessages` (admin-only, default on) controls whether members may run AI on the group's messages. When off, conversation features answer `GROUP_AI_DISABLED` (403); members' own drafts still work. Changes post a system message in the group so everyone sees it. The app hides the group's AI entries accordingly.
+- **Cost estimate.** Users may enter a USD-per-million-tokens price per provider; `GET /ai/config` then reports `usage.estimatedCostUsd` for the month and `costWarning` when it passes `limits.monthlyCostWarningUsd`. ChatApp never guesses prices.
+- **What is stored.** Server: `AiUsageEvents` (counts, tokens, model, status; no text). Phone: translation cache, saved action items, per-chat translation settings; all cleared on logout. Disabling AI never affects messaging or calls: AI code only runs from explicit AI entry points.
+
+## Privacy note
+
+AI requests go through this server: the app decrypts the text it needs on the phone and sends it to the server, which forwards it to the provider. The server and a cloud provider can read that text, so this step is not end-to-end encrypted. The app says so in its AI settings and in every consent sheet.
 
 ## Tests
 

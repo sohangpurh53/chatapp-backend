@@ -103,6 +103,7 @@ const getGroupDetails = async (req, res) => {
         allowMembersToEditGroupInfo: !!settings.allowMembersToEditGroupInfo,
         allowMembersToAddOthers: !!settings.allowMembersToAddOthers,
         slowModeSeconds: Number(settings.slowModeSeconds) || 0,
+        allowAiOnMessages: settings.allowAiOnMessages !== false,
       },
       members,
       me: permissionsFor(chat, me, settings),
@@ -313,7 +314,7 @@ const updateGroupSettings = async (req, res) => {
 
     const body = req.body || {};
     const next = { ...settings };
-    for (const key of ['onlyAdminsCanSend', 'allowMembersToEditGroupInfo', 'allowMembersToAddOthers']) {
+    for (const key of ['onlyAdminsCanSend', 'allowMembersToEditGroupInfo', 'allowMembersToAddOthers', 'allowAiOnMessages']) {
       if (typeof body[key] === 'boolean') next[key] = body[key];
     }
     if (body.slowModeSeconds !== undefined) {
@@ -338,6 +339,12 @@ const updateGroupSettings = async (req, res) => {
         ? `${actorName} set slow mode to ${describeSlowMode(next.slowModeSeconds)}`
         : `${actorName} turned off slow mode`,
       { type: 'settings_changed', key: 'slowModeSeconds' });
+    }
+    if ((next.allowAiOnMessages !== false) !== (settings.allowAiOnMessages !== false)) {
+      await postSystemMessage(io, chat.id, req.user.id, next.allowAiOnMessages === false
+        ? `${actorName} turned off AI features for this group's messages`
+        : `${actorName} allowed AI features on this group's messages`,
+      { type: 'settings_changed', key: 'allowAiOnMessages' });
     }
     await broadcastGroupUpdate(io, chat.id, [], 'settings_changed');
 

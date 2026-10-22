@@ -7,7 +7,7 @@ const express = require('express');
 const assistant = require('../../services/ai/assistant');
 const { checkLimits } = require('../../services/ai/runner');
 const vault = require('../../services/ai/credentialVault');
-const { AiProviderConfig, AiUserSettings, AiUsageEvent, ChatParticipant } = require('../../models');
+const { AiProviderConfig, AiUserSettings, AiUsageEvent, ChatParticipant, Chat } = require('../../models');
 const { assist } = require('../../controllers/aiAssistController');
 
 const CHAT = '99999999-9999-4999-8999-999999999999';
@@ -143,6 +143,8 @@ describe('POST /ai/assist', () => {
     AiUsageEvent.count = async () => usageEvents.length;
     AiUsageEvent.findOne = async () => ({ input: usageEvents.reduce((n, e) => n + (e.inputTokens || 0), 0), output: 0, requests: usageEvents.length });
     AiUsageEvent.create = async (values) => { usageEvents.push(values); return values; };
+    // Not a group: the group AI policy doesn't apply
+    Chat.findByPk = async (id) => ({ id, isGroup: false, settings: {} });
     ChatParticipant.findOne = async ({ where }) => (members.has(where.chatId) && where.userId === USER ? { id: 'm1' } : null);
 
     app = express();

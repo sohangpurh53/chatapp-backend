@@ -4,6 +4,7 @@ const { AiError, redact } = require('./errors');
 const aiSettings = require('./settings');
 const gateway = require('./gateway');
 const registry = require('./registry');
+const privacy = require('./privacy');
 
 // Runs one AI feature request for a user: picks the configured provider and
 // model (no fallback), enforces the user's limits, calls the provider and
@@ -54,7 +55,7 @@ const record = (values) => AiUsageEvent.create(values).catch((error) => {
  * Resolve, check and run. `build(capabilities)` returns the completion
  * request, so callers can ask for JSON only when the model supports it.
  */
-const runFeature = async ({ userId, feature, action = null, build, signal }) => {
+const runFeature = async ({ userId, feature, action = null, scope, build, signal }) => {
   const [settingsRow, rows] = await Promise.all([
     AiUserSettings.findByPk(userId),
     AiProviderConfig.scope('withSecret').findAll({ where: { userId } }),
@@ -63,10 +64,12 @@ const runFeature = async ({ userId, feature, action = null, build, signal }) => 
   const providers = rows.map(r => r.get({ plain: true }));
   const { provider, model } = gateway.resolveTarget(settings, providers, feature);
 
+  // Nothing reaches a cloud provider without the user's consent for this kind of text
+  privacy.requireConsent(settings, provider, scope || 'conversation');
   checkLimits(settings.limits, await usageSummary(userId));
 
   const capabilities = registry.effectiveCapabilities(provider, model);
-  const request = build(capabilities);
+  const request = build(capabilities, settings);
   const started = Date.now();
   const base = { userId, feature, action, providerId: provider.id, providerType: provider.providerType, model };
   try {
@@ -97,4 +100,34 @@ const runFeature = async ({ userId, feature, action = null, build, signal }) => 
   }
 };
 
-module.exports = { runFeature, usageSummary, checkLimits, startOfDayUtc, startOfMonthUtc };
+/**
+ * Estimated spend this month from the prices the user entered per provider.
+ * `complete` is false when tokens were used on a provider without a price.
+ */
+const costEstimate = async (userId, providers, limits = {}, now = new Date()) => {
+  const priced = providers.filter(p => typeof p.pricePerMillionTokensUsd === 'number');
+  if (!priced.length) return { estimatedCostUsd: null, costComplete: false, costWarning: false };
+  const rows = await AiUsageEvent.findAll({
+    where: { userId, createdAt: { [Op.gte]: startOfMonthUtc(now) } },
+    attributes: ['providerId', [fn('COALESCE', fn('SUM', col('inputTokens')), 0), 'input'], [fn('COALESCE', fn('SUM', col('outputTokens')), 0), 'output']],
+    group: ['providerId'],
+    raw: true,
+  });
+  const price = new Map(priced.map(p => [p.id, p.pricePerMillionTokensUsd]));
+  let cost = 0;
+  let complete = true;
+  for (const row of rows) {
+    const tokens = Number(row.input || 0) + Number(row.output || 0);
+    if (!tokens) continue;
+    if (price.has(row.providerId)) cost += (tokens / 1e6) * price.get(row.providerId);
+    else complete = false;
+  }
+  const estimatedCostUsd = Math.round(cost * 10000) / 10000;
+  return {
+    estimatedCostUsd,
+    costComplete: complete,
+    costWarning: !!limits.monthlyCostWarningUsd && estimatedCostUsd >= limits.monthlyCostWarningUsd,
+  };
+};
+
+module.exports = { runFeature, usageSummary, costEstimate, checkLimits, startOfDayUtc, startOfMonthUtc };

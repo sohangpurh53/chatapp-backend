@@ -62,6 +62,12 @@ const AiProviderConfig = sequelize.define('AiProviderConfig', {
     allowNull: false,
     defaultValue: {}
   },
+  // Optional user-entered price (USD per million tokens) for cost estimates;
+  // providers bill differently, so ChatApp never guesses it
+  pricePerMillionTokensUsd: {
+    type: DataTypes.FLOAT,
+    allowNull: true
+  },
   // Last discovered model list: [{ id, label, capabilities? }]
   models: {
     type: DataTypes.JSON,

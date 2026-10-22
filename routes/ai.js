@@ -20,6 +20,8 @@ router.use(authenticateToken, general);
 
 router.get('/config', ai.getConfig);
 router.put('/settings', writes, ai.updateSettings);
+router.post('/consent', writes, ai.grantConsent);
+router.post('/consent/revoke', writes, ai.revokeConsent);
 router.post('/providers', writes, ai.createProvider);
 router.put('/providers/:providerId', writes, ai.updateProvider);
 router.delete('/providers/:providerId', writes, ai.deleteProvider);

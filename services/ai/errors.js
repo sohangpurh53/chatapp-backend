@@ -31,6 +31,9 @@ const MESSAGES = {
   VAULT_NOT_CONFIGURED: 'The server cannot store API keys yet: AI_CREDENTIALS_KEY is not set.',
   VAULT_DECRYPT_FAILED: 'The stored API key could not be read. Enter it again.',
   VALIDATION_ERROR: 'Some settings are not valid.',
+  CONSENT_REQUIRED: 'Allow this AI provider to receive this kind of text first.',
+  CONTEXT_DISABLED: 'Conversation context is turned off in your AI privacy settings.',
+  GROUP_AI_DISABLED: "This group's admins have turned off AI features for the group's messages.",
   LIMIT_REACHED: 'You have reached the maximum number of AI providers.',
 };
 
@@ -48,6 +51,9 @@ const STATUS = {
   BLOCKED_ENDPOINT: 400,
   INSECURE_ENDPOINT: 400,
   VALIDATION_ERROR: 400,
+  CONSENT_REQUIRED: 409,
+  CONTEXT_DISABLED: 409,
+  GROUP_AI_DISABLED: 403,
   LIMIT_REACHED: 400,
   UNSUPPORTED_CAPABILITY: 409,
   VAULT_NOT_CONFIGURED: 503,
@@ -62,10 +68,17 @@ class AiError extends Error {
     this.status = extra.status || STATUS[code] || 502;
     if (extra.providerStatus) this.providerStatus = extra.providerStatus;
     if (extra.detail) this.detail = extra.detail;
+    // Structured, non-secret data for the app (e.g. which consent is needed)
+    if (extra.data) this.data = extra.data;
   }
 
   toJSON() {
-    return { code: this.code, message: this.message, ...(this.detail ? { detail: this.detail } : {}) };
+    return { code: this.code, message: this.message, ...(this.detail ? { detail: this.detail } : {}), ...(this.data ? { data: this.data } : {}) };
+  }
+
+  /** Body for an API error response. */
+  toResponse() {
+    return { error: this.message, code: this.code, ...(this.detail ? { detail: this.detail } : {}), ...(this.data ? { data: this.data } : {}) };
   }
 }
 

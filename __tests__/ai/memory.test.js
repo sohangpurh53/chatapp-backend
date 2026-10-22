@@ -6,7 +6,7 @@ const express = require('express');
 
 const memory = require('../../services/ai/memory');
 const vault = require('../../services/ai/credentialVault');
-const { AiProviderConfig, AiUserSettings, AiUsageEvent, ChatParticipant } = require('../../models');
+const { AiProviderConfig, AiUserSettings, AiUsageEvent, ChatParticipant, Chat } = require('../../models');
 const { ask } = require('../../controllers/aiAssistController');
 
 const CHAT = '99999999-9999-4999-8999-999999999999';
@@ -132,6 +132,8 @@ describe('POST /ai/memory', () => {
     AiUsageEvent.count = async () => 0;
     AiUsageEvent.findOne = async () => ({ input: 0, output: 0, requests: 0 });
     AiUsageEvent.create = async (v) => v;
+    // Not a group: the group AI policy doesn't apply
+    Chat.findByPk = async (id) => ({ id, isGroup: false, settings: {} });
     ChatParticipant.findOne = async ({ where }) => (members.has(where.chatId) && where.userId === USER ? { id: 'm' } : null);
 
     const app = express();

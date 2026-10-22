@@ -8,6 +8,7 @@ const aiSettings = require('../services/ai/settings');
 const gateway = require('../services/ai/gateway');
 const { validateBaseUrl, privateEndpointsAllowed } = require('../services/ai/urlGuard');
 const runner = require('../services/ai/runner');
+const privacy = require('../services/ai/privacy');
 const assistOptions = require('./aiAssistController').options;
 
 // AI & Models settings API (stage 1: provider configuration only).
@@ -43,6 +44,7 @@ const serializeProvider = (row) => {
     deploymentType: json.deploymentType || null,
     capabilities: registry.effectiveCapabilities(json),
     capabilityOverrides: json.capabilityOverrides || {},
+    pricePerMillionTokensUsd: json.pricePerMillionTokensUsd ?? null,
     models: Array.isArray(json.models) ? json.models : [],
     modelsFetchedAt: json.modelsFetchedAt || null,
     status: json.status || 'untested',
@@ -142,6 +144,13 @@ const parseProviderInput = (body, def, existing) => {
     values.deploymentType = declared;
   }
 
+  if ('pricePerMillionTokensUsd' in body) {
+    const price = body.pricePerMillionTokensUsd;
+    if (price === null || price === '') values.pricePerMillionTokensUsd = null;
+    else if (typeof price !== 'number' || !Number.isFinite(price) || price < 0 || price > 1000) throw invalid('The price must be a number between 0 and 1000.');
+    else values.pricePerMillionTokensUsd = price;
+  }
+
   if ('capabilityOverrides' in body) {
     const input = body.capabilityOverrides;
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw invalid('capabilityOverrides must be an object.');
@@ -174,6 +183,7 @@ const getConfig = async (req, res) => {
       listProviders(req.user.id),
       runner.usageSummary(req.user.id).catch(() => null),
     ]);
+    if (usage) Object.assign(usage, await runner.costEstimate(req.user.id, providers.map(p => p.get({ plain: true })), settings.limits).catch(() => ({})));
     res.json({
       settings,
       providers: providers.map(serializeProvider),
@@ -187,6 +197,7 @@ const getConfig = async (req, res) => {
         privateEndpointsAllowed: privateEndpointsAllowed(),
         maxProviders: MAX_PROVIDERS_PER_USER,
       },
+      privacy: { policyVersion: privacy.POLICY_VERSION, contextLevels: privacy.CONTEXT_LEVELS },
     });
   } catch (error) {
     sendError(res, error, 'Failed to load AI settings');
@@ -351,7 +362,38 @@ const getProviderModels = async (req, res) => {
   }
 };
 
+// POST /ai/consent { providerId, scope }: the user agreed to send this kind of text to this provider
+const grantConsent = async (req, res) => {
+  try {
+    const { providerId, scope } = req.body || {};
+    if (!privacy.SCOPES.includes(scope)) throw invalid('Unknown consent scope.');
+    if (!UUID_RE.test(providerId || '')) throw new AiError('PROVIDER_NOT_FOUND');
+    const row = await AiProviderConfig.findOne({ where: { id: providerId, userId: req.user.id } });
+    if (!row) throw new AiError('PROVIDER_NOT_FOUND');
+    const settings = privacy.grant(await loadSettings(req.user.id), row.get({ plain: true }), scope);
+    await saveSettings(req.user.id, settings);
+    res.json({ settings });
+  } catch (error) {
+    sendError(res, error, 'Failed to save permission');
+  }
+};
+
+// POST /ai/consent/revoke { providerId?, scope? }: withdraw one, a provider's, or all
+const revokeConsent = async (req, res) => {
+  try {
+    const { providerId, scope } = req.body || {};
+    if (scope && !privacy.SCOPES.includes(scope)) throw invalid('Unknown consent scope.');
+    const settings = privacy.revoke(await loadSettings(req.user.id), providerId || null, scope || null);
+    await saveSettings(req.user.id, settings);
+    res.json({ settings });
+  } catch (error) {
+    sendError(res, error, 'Failed to withdraw permission');
+  }
+};
+
 module.exports = {
+  grantConsent,
+  revokeConsent,
   getConfig,
   updateSettings,
   createProvider,

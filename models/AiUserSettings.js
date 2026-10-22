@@ -39,6 +39,18 @@ const AiUserSettings = sequelize.define('AiUserSettings', {
     type: DataTypes.STRING(40),
     allowNull: true
   },
+  // 'off' | 'minimal' | 'standard': how much conversation AI may see
+  contextLevel: {
+    type: DataTypes.STRING(12),
+    allowNull: false,
+    defaultValue: 'standard'
+  },
+  // Consent to send drafts / conversation text to each cloud provider
+  consents: {
+    type: DataTypes.JSON,
+    allowNull: false,
+    defaultValue: {}
+  },
   // { dailyRequestLimit, monthlyTokenLimit, monthlyCostWarningUsd }
   limits: {
     type: DataTypes.JSON,

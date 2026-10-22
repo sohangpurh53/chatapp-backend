@@ -20,8 +20,8 @@
     "cleanup-signals": "node scripts/cleanup-expired-signals.js",
     "generate-apk-key": "node scripts/generate-apk-key.js",
     "test-apk-upload": "node test-apk-upload.js",
-    "test": "node --test \"__tests__/**/*.test.js\"",
-    "test:ai": "node --test \"__tests__/ai/*.test.js\"",
+    "test": "node --require ./__tests__/setup.js --test \"__tests__/**/*.test.js\"",
+    "test:ai": "node --require ./__tests__/setup.js --test \"__tests__/ai/*.test.js\"",
     "generate-ai-key": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
   },
   "keywords": [
