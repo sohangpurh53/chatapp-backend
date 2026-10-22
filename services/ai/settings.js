@@ -24,6 +24,7 @@ const defaultSettings = () => ({
   defaultModel: null,
   features: Object.fromEntries(FEATURE_KEYS.map(k => [k, { enabled: true, providerId: null, model: null }])),
   limits: { dailyRequestLimit: null, monthlyTokenLimit: null, monthlyCostWarningUsd: null },
+  preferredLanguage: null,
 });
 
 /** Stored row (or nothing) -> complete settings object with every key present. */
@@ -41,6 +42,7 @@ const normalize = (row) => {
       model: features[k]?.model || null,
     }])),
     limits: { ...base.limits, ...(row.limits || {}) },
+    preferredLanguage: row.preferredLanguage || null,
   };
 };
 
@@ -95,6 +97,13 @@ const applyUpdate = (current, patch, providerIds) => {
       }
       if ('model' in value) target.model = checkModel(value.model, `Model for ${key}`);
     }
+  }
+
+  if ('preferredLanguage' in patch) {
+    const { LANGUAGES } = require('./assistant');
+    const value = patch.preferredLanguage;
+    if (value !== null && value !== '' && !LANGUAGES.includes(value)) throw invalid('Choose a supported language.');
+    next.preferredLanguage = value || null;
   }
 
   if ('limits' in patch) {

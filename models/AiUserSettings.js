@@ -33,6 +33,12 @@ const AiUserSettings = sequelize.define('AiUserSettings', {
     allowNull: false,
     defaultValue: {}
   },
+  // Language bridge: the language this user reads (English name), or null to
+  // follow the phone's language
+  preferredLanguage: {
+    type: DataTypes.STRING(40),
+    allowNull: true
+  },
   // { dailyRequestLimit, monthlyTokenLimit, monthlyCostWarningUsd }
   limits: {
     type: DataTypes.JSON,

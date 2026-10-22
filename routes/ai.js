@@ -34,6 +34,9 @@ const assistLimiter = createRateLimiter({
 router.post('/assist', assistLimiter, aiAssist.assist);
 router.post('/memory', assistLimiter, aiAssist.ask);
 router.post('/actions', assistLimiter, aiAssist.findActions);
+// Auto-translation can fire for several messages in a row: its own, larger budget
+const translateLimiter = createRateLimiter({ name: 'ai-translate', windowMs: 60 * 1000, max: 40, message: 'Too many translations. Wait a moment.' });
+router.post('/translate', translateLimiter, aiAssist.translateMessages);
 
 router.get('/providers/:providerId/models', (req, res, next) => (
   req.query.refresh === 'true' || req.query.refresh === '1' ? outbound(req, res, next) : next()

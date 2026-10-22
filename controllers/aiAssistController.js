@@ -4,6 +4,7 @@ const assistant = require('../services/ai/assistant');
 const runner = require('../services/ai/runner');
 const memory = require('../services/ai/memory');
 const actions = require('../services/ai/actions');
+const translate = require('../services/ai/translate');
 
 // POST /ai/assist: the message assistant. It returns editable drafts and never
 // sends anything. Conversation context is decrypted on the user's phone and
@@ -141,6 +142,35 @@ const findActions = async (req, res) => {
   }
 };
 
+// POST /ai/translate: translate decrypted messages into one language. The app
+// keeps the originals and shows translations beside them.
+const translateMessages = async (req, res) => {
+  const controller = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
+  try {
+    const input = translate.parseRequest(req.body);
+    if (input.chatId) await requireMembership(input.chatId, req.user.id);
+    const { result, target } = await runner.runFeature({
+      userId: req.user.id,
+      feature: 'translation',
+      action: 'messages',
+      signal: controller.signal,
+      build: (capabilities) => ({
+        messages: translate.buildMessages(input),
+        json: capabilities.structuredOutput,
+        maxTokens: 4000,
+        temperature: 0.2,
+        lowReasoning: true,
+      }),
+    });
+    res.json({ ...translate.parseTranslations(result.text, input), targetLanguage: input.targetLanguage, provider: target });
+  } catch (error) {
+    sendFailure(res, error, 'Translation failed. Try again.');
+  }
+};
+
 /** Tones and languages the assistant accepts (also sent with GET /ai/config). */
 const options = () => ({
   tones: Object.keys(assistant.TONES),
@@ -150,4 +180,4 @@ const options = () => ({
   memory: { maxEvidence: memory.LIMITS.evidenceItems, maxChars: memory.LIMITS.totalChars, maxQuestionChars: memory.LIMITS.questionChars },
 });
 
-module.exports = { assist, ask, findActions, options };
+module.exports = { assist, ask, findActions, translateMessages, options };
