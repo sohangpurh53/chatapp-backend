@@ -33,6 +33,7 @@ const assistLimiter = createRateLimiter({
 });
 router.post('/assist', assistLimiter, aiAssist.assist);
 router.post('/memory', assistLimiter, aiAssist.ask);
+router.post('/actions', assistLimiter, aiAssist.findActions);
 
 router.get('/providers/:providerId/models', (req, res, next) => (
   req.query.refresh === 'true' || req.query.refresh === '1' ? outbound(req, res, next) : next()

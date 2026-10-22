@@ -3,6 +3,7 @@ const { AiError, redact } = require('../services/ai/errors');
 const assistant = require('../services/ai/assistant');
 const runner = require('../services/ai/runner');
 const memory = require('../services/ai/memory');
+const actions = require('../services/ai/actions');
 
 // POST /ai/assist: the message assistant. It returns editable drafts and never
 // sends anything. Conversation context is decrypted on the user's phone and
@@ -108,6 +109,38 @@ const ask = async (req, res) => {
   }
 };
 
+// POST /ai/actions: proposed action cards from evidence the phone selected.
+// Nothing is saved or shared here; the app asks the user about every card.
+const findActions = async (req, res) => {
+  const controller = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
+  try {
+    const input = actions.parseRequest(req.body);
+    await requireMembership(input.chatId, req.user.id);
+    const { result, target } = await runner.runFeature({
+      userId: req.user.id,
+      feature: 'actions',
+      action: 'extract',
+      signal: controller.signal,
+      build: (capabilities) => ({
+        messages: actions.buildMessages(input),
+        json: capabilities.structuredOutput,
+        maxTokens: 3000,
+        temperature: 0.1,
+      }),
+    });
+    if (result.finishReason === 'length' && !result.text.trim()) {
+      throw new AiError('BAD_RESPONSE', 'The model ran out of room before answering. Try fewer messages.');
+    }
+    const { cards, checks } = actions.parseCards(result.text, input);
+    res.json({ cards, checks, provider: target, searched: input.evidence.length });
+  } catch (error) {
+    sendFailure(res, error, 'Finding action items failed. Try again.');
+  }
+};
+
 /** Tones and languages the assistant accepts (also sent with GET /ai/config). */
 const options = () => ({
   tones: Object.keys(assistant.TONES),
@@ -117,4 +150,4 @@ const options = () => ({
   memory: { maxEvidence: memory.LIMITS.evidenceItems, maxChars: memory.LIMITS.totalChars, maxQuestionChars: memory.LIMITS.questionChars },
 });
 
-module.exports = { assist, ask, options };
+module.exports = { assist, ask, findActions, options };
