@@ -31,6 +31,7 @@ const notificationRoutes = require('./routes/notifications');
 const mediaRoutes = require('./routes/media');
 const appLogsRoutes = require("./routes/applogs")
 const apkRoutes = require('./routes/apk');
+const aiRoutes = require('./routes/ai');
 
 const app = express();
 const server = http.createServer(app);
@@ -81,6 +82,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/media', mediaRoutes);
 app.use("/api", appLogsRoutes);
 app.use('/api/apk', apkRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
