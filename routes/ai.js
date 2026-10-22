@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/rateLimit');
 const ai = require('../controllers/aiController');
+const aiAssist = require('../controllers/aiAssistController');
 
 // Every AI route needs a signed-in user. Connection tests and model discovery
 // reach out to third-party services, so they get a much tighter limit.
@@ -23,6 +24,15 @@ router.post('/providers', writes, ai.createProvider);
 router.put('/providers/:providerId', writes, ai.updateProvider);
 router.delete('/providers/:providerId', writes, ai.deleteProvider);
 router.post('/providers/:providerId/test', outbound, ai.testProvider);
+// Message assistant: each call reaches the user's provider
+const assistLimiter = createRateLimiter({
+  name: 'ai-assist',
+  windowMs: 60 * 1000,
+  max: 30,
+  message: 'Too many AI requests. Wait a moment and try again.',
+});
+router.post('/assist', assistLimiter, aiAssist.assist);
+
 router.get('/providers/:providerId/models', (req, res, next) => (
   req.query.refresh === 'true' || req.query.refresh === '1' ? outbound(req, res, next) : next()
 ), ai.getProviderModels);

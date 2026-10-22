@@ -5,7 +5,7 @@ const { AiError, fromProviderResponse } = require('../errors');
 // endpoint (vLLM, LM Studio, LiteLLM, OpenRouter, Together, ...).
 
 // Models in /models that can't do chat completions
-const NON_CHAT = /(embedding|embed|tts|whisper|transcribe|dall-e|gpt-image|moderation|davinci|babbage|realtime|audio|search|computer-use|-image|imagen|guard|distil-whisper)/i;
+const NON_CHAT = /(embedding|embed|tts|whisper|transcribe|dall-e|gpt-image|moderation|davinci|babbage|realtime|audio|search|computer-use|-image|imagen|guard|distil-whisper|orpheus|playai|speech|voice|sonic)/i;
 
 const authHeaders = (conn) => (conn.apiKey ? { Authorization: `Bearer ${conn.apiKey}` } : {});
 
@@ -37,7 +37,10 @@ const listModels = async (conn, { signal } = {}) => {
 const usesCompletionTokens = (conn, model) =>
   conn.providerType === 'openai' && /^(o\d|gpt-5)/i.test(model);
 
-const complete = async (conn, { model, messages, maxTokens, temperature, json, signal, timeoutMs }) => {
+// Reasoning models that accept reasoning_effort (OpenAI o-series/gpt-5, gpt-oss on Groq and others)
+const REASONING_MODEL = /(^|\/)(o\d|gpt-5|gpt-oss)/i;
+
+const complete = async (conn, { model, messages, maxTokens, temperature, json, signal, timeoutMs, lowReasoning }) => {
   const modern = usesCompletionTokens(conn, model);
   const payload = {
     model,
@@ -46,6 +49,7 @@ const complete = async (conn, { model, messages, maxTokens, temperature, json, s
     ...(maxTokens ? (modern ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }) : {}),
     ...(typeof temperature === 'number' && !modern ? { temperature } : {}),
     ...(json ? { response_format: { type: 'json_object' } } : {}),
+    ...(lowReasoning && REASONING_MODEL.test(model) ? { reasoning_effort: 'low' } : {}),
   };
   const body = await call(conn, '/chat/completions', { method: 'POST', body: payload, signal, timeoutMs }, { model });
   const choice = body?.choices?.[0];

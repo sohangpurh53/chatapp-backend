@@ -42,7 +42,7 @@ const describeModel = async (conn, model, { signal } = {}) => {
   };
 };
 
-const complete = async (conn, { model, messages, maxTokens, temperature, json, signal, timeoutMs }) => {
+const complete = async (conn, { model, messages, maxTokens, temperature, json, signal, timeoutMs, lowReasoning }) => {
   const options = {
     ...(maxTokens ? { num_predict: maxTokens } : {}),
     ...(typeof temperature === 'number' ? { temperature } : {}),
@@ -52,6 +52,8 @@ const complete = async (conn, { model, messages, maxTokens, temperature, json, s
     messages: messages.map(m => ({ role: m.role, content: m.content })),
     stream: false,
     ...(json ? { format: 'json' } : {}),
+    // gpt-oss on Ollama takes a thinking level; other thinking models take true/false
+    ...(lowReasoning && /gpt-oss/i.test(model) ? { think: 'low' } : {}),
     ...(Object.keys(options).length ? { options } : {}),
   };
   const body = await call(conn, '/api/chat', { method: 'POST', body: payload, signal, timeoutMs }, { model });

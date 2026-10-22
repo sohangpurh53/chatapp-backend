@@ -1,7 +1,7 @@
-# AI & Models: provider configuration (stage 1)
+# AI & Models
 
 Users connect their own AI providers under **Settings > AI & Models** in the app.
-This stage stores and tests provider configurations. No AI feature runs yet.
+Stage 1 stores and tests provider configurations. Stage 2 adds the message assistant in the chat composer.
 
 ## Supported providers
 
@@ -52,8 +52,9 @@ Optional variables:
 | `DELETE /api/ai/providers/:id` | Remove; settings that pointed at it are cleared |
 | `POST /api/ai/providers/:id/test` | List models, then send one short sample prompt to the chosen model |
 | `GET /api/ai/providers/:id/models?refresh=true` | Fetch the provider's model list |
+| `POST /api/ai/assist` | Message assistant: returns editable drafts, never sends. Actions: `compose`, `rewrite` (+`tone`), `fix_grammar`, `shorter`, `longer`, `alternatives`, `translate` (+`language`), `reply` (+`chatId`, `context`) |
 
-Rate limits per user: 120 requests a minute overall, 30 writes a minute, 12 connection tests or model fetches a minute. The counters are in memory, so each server instance counts separately.
+Rate limits per user: 120 requests a minute overall, 30 writes a minute, 12 connection tests or model fetches a minute, 30 assistant requests a minute. The counters are in memory, so each server instance counts separately.
 
 ## Security design
 
@@ -62,6 +63,14 @@ Rate limits per user: 120 requests a minute overall, 30 writes a minute, 12 conn
 - **SSRF protection.** Base URLs must be http(s) with no credentials, query or fragment. Every resolved address is checked when connecting, which also blocks DNS rebinding. Link-local and metadata addresses are always blocked. Private networks are blocked unless `AI_ALLOW_PRIVATE_ENDPOINTS=true`. Plain HTTP only goes to private addresses. Redirects are never followed. Responses are capped at 5 MB.
 - **No silent fallback.** A feature uses its own provider, or else the default. If that provider is missing, disabled or failing, the feature returns an error. It never switches to another service.
 - **Redaction.** Provider error text is stripped of key-shaped strings and the exact key before it is logged or returned.
+
+## Message assistant (stage 2)
+
+- `rewrite`, `fix_grammar`, `shorter`, `longer`, `alternatives` and `compose` run on the **assistant** feature, `translate` on **translation**, and `reply` on **replies**. Each uses the provider and model chosen for that feature.
+- Only `reply` sends conversation context. The app sends at most 15 recent text messages it has already decrypted, with speakers renamed "Me", "Person 1", "Person 2". The server accepts context only for chats where the caller is an active member.
+- Prompts tell the model not to add facts, dates, commitments or promises, and to treat the draft and conversation as data, not instructions.
+- Usage limits are enforced before a request reaches the provider. `AiUsageEvents` stores counts, tokens, model and status only, never text.
+- Closing the app's request (Cancel) aborts the provider call.
 
 ## Privacy note for later stages
 

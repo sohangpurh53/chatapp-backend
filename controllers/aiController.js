@@ -7,6 +7,8 @@ const vault = require('../services/ai/credentialVault');
 const aiSettings = require('../services/ai/settings');
 const gateway = require('../services/ai/gateway');
 const { validateBaseUrl, privateEndpointsAllowed } = require('../services/ai/urlGuard');
+const runner = require('../services/ai/runner');
+const assistOptions = require('./aiAssistController').options;
 
 // AI & Models settings API (stage 1: provider configuration only).
 // Rules: API keys are write-only; every lookup is scoped to req.user; the
@@ -167,13 +169,19 @@ const rewrapIfNeeded = async (row) => {
 // GET /ai/config: everything the AI & Models screen needs in one request
 const getConfig = async (req, res) => {
   try {
-    const [settings, providers] = await Promise.all([loadSettings(req.user.id), listProviders(req.user.id)]);
+    const [settings, providers, usage] = await Promise.all([
+      loadSettings(req.user.id),
+      listProviders(req.user.id),
+      runner.usageSummary(req.user.id).catch(() => null),
+    ]);
     res.json({
       settings,
       providers: providers.map(serializeProvider),
       catalog: registry.catalog(),
       features: aiSettings.FEATURES,
       capabilityLabels: registry.CAPABILITY_LABELS,
+      assistant: assistOptions(),
+      usage,
       server: {
         credentialStorage: vault.isConfigured(),
         privateEndpointsAllowed: privateEndpointsAllowed(),

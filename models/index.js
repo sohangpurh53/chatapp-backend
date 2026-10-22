@@ -14,6 +14,7 @@ const EncryptionSession = require('./EncryptionSession');
 const UserSession = require('./UserSession');
 const AiProviderConfig = require('./AiProviderConfig');
 const AiUserSettings = require('./AiUserSettings');
+const AiUsageEvent = require('./AiUsageEvent');
 
 // User associations
 User.hasMany(Message, { foreignKey: 'senderId', as: 'sentMessages' });
@@ -114,6 +115,7 @@ User.hasMany(AiProviderConfig, { foreignKey: 'userId', as: 'aiProviders', onDele
 AiProviderConfig.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 User.hasOne(AiUserSettings, { foreignKey: 'userId', as: 'aiSettings', onDelete: 'CASCADE' });
 AiUserSettings.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+User.hasMany(AiUsageEvent, { foreignKey: 'userId', as: 'aiUsage', onDelete: 'CASCADE' });
 
 module.exports = {
   sequelize,
@@ -131,5 +133,6 @@ module.exports = {
   UserSession,
   EncryptionSession,
   AiProviderConfig,
-  AiUserSettings
+  AiUserSettings,
+  AiUsageEvent
 };
