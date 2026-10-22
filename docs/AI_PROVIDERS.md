@@ -112,3 +112,31 @@ npm test        # backend, Node's built-in runner
 ```
 
 App tests are in `ChatApp/src/screens/__tests__/AiSettingsScreens.test.tsx`.
+
+## Status (2026-10-23)
+
+All seven stages of the AI plan are implemented and deployed. Verified on a real Android 12 device against the live server with a Groq provider (`openai/gpt-oss-120b`):
+
+| Area | Verified on device |
+| --- | --- |
+| Provider setup | Add Groq with key, connection test, live model list, default model, per-feature feature switches |
+| Message assistant | Polite rewrite, other versions, translate draft, suggest replies, copy, replace draft, cancel, error state |
+| Group memory | "What did I miss?", a question with an honest "not enough" answer, source quote, jump to message with highlight |
+| Action cards | Scan of a chat with no actionable content ("Nothing actionable found"); card actions covered by tests |
+| Language bridge | Translate a received message to Hindi under the original, hide/show, inline failure with retry |
+| Privacy | Consent sheet for drafts (allowed, request retried), separate consent for chat messages (declined, "Not sent"), Withdraw, AI off removes every AI entry point while messaging stays unchanged |
+
+Automated tests: backend `npm test` (125, Node test runner, no database needed), app `npx jest` (1393 passing; 6 failures pre-date this work: ChatListScreen x2, StorageService x1, BackgroundCallManager x3 which only fail in a full run).
+
+## Known limitations
+
+- **Server sees plaintext during AI requests.** By design (keys are server-side so they work across devices); disclosed in the app. A device-direct mode (phone calls the provider itself) would avoid this and is not built.
+- **No streaming.** Adapters return complete answers; the capability flag exists but nothing streams yet.
+- **Cost is an estimate** from a price the user types per provider; ChatApp has no price list.
+- **Polls are text.** ChatApp has no poll message type, so "Ask the chat" puts a numbered list in the message box.
+- **Reminders** use local notifications; Android may deliver them a few minutes late (no exact-alarm permission). **Calendar** opens a Google Calendar template link, not the device calendar.
+- **Group memory search** is keyword-based on the phone (no embeddings). Long chats are capped at the most recent 500 messages per question; media content is never read, only file names.
+- **Rate limits** are counted per server instance (in memory).
+- **Existing "Copy" message action** (pre-AI) still only shows a toast; the AI sheets' Copy really copies.
+- **Message editing** and **deleted messages**: translations and cached answers are keyed by message id and edit time, so edits re-translate; deleted messages disappear from the phone's history and are not sent again, but a translation already shown stays until the chat is reopened.
+
