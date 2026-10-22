@@ -62,8 +62,19 @@ describe('assistant prompts', () => {
     const input = assistant.parseRequest({ action: 'reply', chatId: CHAT, context: [{ speaker: 1, text: 'Dinner at 8?' }, { fromMe: true, text: 'maybe' }] });
     const [system, user] = assistant.buildMessages(input, { json: true });
     assert.match(system.content, /Do not accept invitations/);
+    assert.match(system.content, /written by Me, in the first person/);
+    assert.match(system.content, /latest messages are Me's own/);
     assert.match(system.content, /"drafts"/);
     assert.match(user.content, /\[Person 1\]: Dinner at 8\?\n\[Me\]: maybe/);
+  });
+});
+
+describe('prompt wording', () => {
+  test('alternatives keep the tone and sentence type, translation covers greetings', () => {
+    const [alt] = assistant.buildMessages(assistant.parseRequest({ action: 'alternatives', text: 'can u come?' }), { json: true });
+    assert.match(alt.content, /a question stays a question/);
+    const [tr] = assistant.buildMessages(assistant.parseRequest({ action: 'translate', text: 'Hey there', language: 'Hindi' }), { json: false });
+    assert.match(tr.content, /including greetings/);
   });
 });
 

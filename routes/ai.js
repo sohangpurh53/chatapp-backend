@@ -32,6 +32,7 @@ const assistLimiter = createRateLimiter({
   message: 'Too many AI requests. Wait a moment and try again.',
 });
 router.post('/assist', assistLimiter, aiAssist.assist);
+router.post('/memory', assistLimiter, aiAssist.ask);
 
 router.get('/providers/:providerId/models', (req, res, next) => (
   req.query.refresh === 'true' || req.query.refresh === '1' ? outbound(req, res, next) : next()

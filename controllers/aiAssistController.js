@@ -2,6 +2,7 @@ const { ChatParticipant } = require('../models');
 const { AiError, redact } = require('../services/ai/errors');
 const assistant = require('../services/ai/assistant');
 const runner = require('../services/ai/runner');
+const memory = require('../services/ai/memory');
 
 // POST /ai/assist: the message assistant. It returns editable drafts and never
 // sends anything. Conversation context is decrypted on the user's phone and
@@ -61,12 +62,59 @@ const assist = async (req, res) => {
   }
 };
 
+const sendFailure = (res, error, fallback) => {
+  if (res.headersSent || res.destroyed) return;
+  if (error instanceof AiError) {
+    res.status(error.status).json({ error: error.message, code: error.code, ...(error.detail ? { detail: error.detail } : {}) });
+    return;
+  }
+  console.error('[AI] request failed:', error?.name, redact(error?.message || ''));
+  res.status(500).json({ error: fallback });
+};
+
+const requireMembership = async (chatId, userId) => {
+  const member = await ChatParticipant.findOne({ where: { chatId, userId, isActive: true }, attributes: ['id'] });
+  if (!member) throw new AiError('VALIDATION_ERROR', 'You are not a member of this chat.', { status: 403 });
+};
+
+// POST /ai/memory: answer a question about a chat from evidence the phone
+// selected and decrypted. Answers cite the evidence; nothing is stored.
+const ask = async (req, res) => {
+  const controller = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
+  try {
+    const input = memory.parseRequest(req.body);
+    await requireMembership(input.chatId, req.user.id);
+    const { result, target } = await runner.runFeature({
+      userId: req.user.id,
+      feature: 'memory',
+      action: input.mode,
+      signal: controller.signal,
+      build: (capabilities) => ({
+        messages: memory.buildMessages(input),
+        json: capabilities.structuredOutput,
+        maxTokens: 3000,
+        temperature: 0.1,
+      }),
+    });
+    if (result.finishReason === 'length' && !result.text.trim()) {
+      throw new AiError('BAD_RESPONSE', 'The model ran out of room before answering. Try a shorter time range.');
+    }
+    res.json({ ...memory.parseAnswer(result.text, input), provider: target, searched: input.evidence.length });
+  } catch (error) {
+    sendFailure(res, error, 'Group memory failed. Try again.');
+  }
+};
+
 /** Tones and languages the assistant accepts (also sent with GET /ai/config). */
 const options = () => ({
   tones: Object.keys(assistant.TONES),
   languages: assistant.LANGUAGES,
   maxDraftChars: assistant.LIMITS.textChars,
   maxContextMessages: assistant.LIMITS.contextMessages,
+  memory: { maxEvidence: memory.LIMITS.evidenceItems, maxChars: memory.LIMITS.totalChars, maxQuestionChars: memory.LIMITS.questionChars },
 });
 
-module.exports = { assist, options };
+module.exports = { assist, ask, options };

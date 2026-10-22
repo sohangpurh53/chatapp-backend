@@ -64,16 +64,18 @@ const instructionFor = (action, input) => {
     case 'longer':
       return 'Make <draft> a little longer and clearer by expanding only what is already there. Do not add new information.';
     case 'alternatives':
-      return `Write ${input.count} different versions of <draft> that say the same thing in different words.`;
+      return `Write ${input.count} different versions of <draft> that say the same thing in different words. Keep the same tone and the same kind of sentence: a question stays a question, a request stays a request.`;
     case 'translate':
-      return `Translate <draft> into ${input.language}. Keep the meaning, tone, names, emoji and formatting. Do not add or remove anything.`;
+      return `Translate all of <draft> into ${input.language}, including greetings and casual words. Keep the meaning, tone, emoji and formatting, and keep people's names as they are. Do not add or remove anything.`;
     case 'reply':
       return [
-        `Suggest ${input.count} different short replies that "Me" could send next in <conversation>.`,
+        `Suggest ${input.count} different short messages that "Me" could send next in <conversation>.`,
+        'Every suggestion is written by Me, in the first person, to the other people in the chat.',
+        'Respond to what the other people said most recently. If the latest messages are Me\'s own, suggest a natural follow-up from Me instead of answering Me.',
         'Base them only on what the conversation says.',
         'Do not accept invitations, agree to plans, confirm times, make promises or state facts on Me\'s behalf.',
         'When a reply needs a decision or information only Me has, keep it neutral or ask a question instead.',
-        input.text ? 'Me has started a reply in <draft>: follow its intent.' : '',
+        input.text ? '<draft> is the message Me has started typing: every suggestion must keep its meaning and point of view.' : '',
       ].filter(Boolean).join(' ');
     default:
       throw new AiError('VALIDATION_ERROR', 'Unknown assistant action.');
