@@ -54,6 +54,7 @@ Optional variables:
 | `GET /api/ai/providers/:id/models?refresh=true` | Fetch the provider's model list |
 | `POST /api/ai/memory` | Group memory: answers from evidence the phone selected (`chatId`, `question` or `mode: summary`, `evidence[]`). Cites refs; invented refs are dropped |
 | `POST /api/ai/actions` | Action cards: proposed tasks, events, polls, decisions, follow-ups from evidence. Owners need cited messages; deadlines need their exact wording in a cited message |
+| `POST /api/ai/translate` | Language bridge: translate up to 20 decrypted messages into one supported language (`targetLanguage`, `items[]`, optional `chatId`). Returns per-item `same`/`text`/`sourceLanguage`; skipped items come back in `failed` |
 | `POST /api/ai/assist` | Message assistant: returns editable drafts, never sends. Actions: `compose`, `rewrite` (+`tone`), `fix_grammar`, `shorter`, `longer`, `alternatives`, `translate` (+`language`), `reply` (+`chatId`, `context`) |
 
 Rate limits per user: 120 requests a minute overall, 30 writes a minute, 12 connection tests or model fetches a minute, 30 assistant requests a minute. The counters are in memory, so each server instance counts separately.
@@ -79,6 +80,14 @@ Rate limits per user: 120 requests a minute overall, 30 writes a minute, 12 conn
 - Messages are end-to-end encrypted, so the phone loads the chat history the user can see, decrypts it, and selects evidence: keyword matches with surrounding context for a question (up to 60 messages), the latest messages for summaries (up to 120) and action cards (up to 100). Senders are sent as "Me" / "Person N"; the phone puts real names back into answers. File messages are described by their file name only.
 - The server accepts evidence only from active chat members and never stores it.
 - Action cards are proposals. Tasks and reminders are saved on the phone (AsyncStorage, local notifications); events open a pre-filled Google Calendar entry; polls, decision summaries and assignments are put in the message box for the user to send, so they stay end-to-end encrypted.
+
+## Language bridge (stage 5)
+
+- Users set their language under AI & Models (`AiUserSettings.preferredLanguage`); unset means the phone's language.
+- A message can be translated from its long-press menu (into the user's language or any supported one). A chat can be set to translate new messages automatically; that is off by default, set per chat on the phone, and explains where the text goes before it is turned on.
+- Originals are never replaced. Translations appear under the message, labelled as AI translations, and can be hidden. Translations are cached on the phone (wiped on logout), never on the server.
+- Draft translation uses the assistant. A chat can store "their language", chosen by the user (never guessed), which adds a one-tap translate button.
+- Translation runs on the **translation** feature's provider and model, with its own rate limit (40 a minute).
 
 ## Privacy note for later stages
 
