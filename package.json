@@ -57,5 +57,8 @@
     "axios": "^1.13.2",
     "nodemon": "^3.1.10",
     "socket.io-client": "^4.8.1"
+  },
+  "overrides": {
+    "uuid": "$uuid"
   }
 }
