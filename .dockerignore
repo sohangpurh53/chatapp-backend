@@ -1,0 +1,27 @@
+# Dependencies are installed inside the image
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Secrets: pass these at runtime (env vars / mounted files), never bake them in
+.env
+.env.*
+!.env.example
+*firebase-adminsdk*.json
+firebase-service-account.json
+
+# VCS / editor / Docker
+.git
+.gitignore
+.vscode
+.idea
+Dockerfile
+.dockerignore
+
+# Tests, debug scripts and docs aren't needed at runtime
+__tests__
+test-*.js
+debug-*.js
+start-test-interface.sh
+docs
+*.md
