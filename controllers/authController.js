@@ -4,6 +4,7 @@ const { User, EncryptionSession } = require('../models');
 const { Op } = require('sequelize');
 const encryptionService = require('../services/encryptionService');
 const sessionService = require('../services/sessionService');
+const { normalizeEmail, emailMatches } = require('../utils/email');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -18,7 +19,8 @@ const generateRefreshToken = (userId, sid) => {
 
 const register = async (req, res) => {
   try {
-    const { username, email, password, publicKey, encryptedPrivateKey, keySalt, keyIv } = req.body;
+    const { username, password, publicKey, encryptedPrivateKey, keySalt, keyIv } = req.body;
+    const email = normalizeEmail(req.body.email);
 
     console.log('📥 Registration request received:', {
       username,
@@ -43,10 +45,10 @@ const register = async (req, res) => {
       });
     }
 
-    // Check if user already exists
+    // Check if user already exists (email compared ignoring case)
     const existingUser = await User.findOne({
       where: {
-        [Op.or]: [{ email }, { username }]
+        [Op.or]: [emailMatches(email), { username }]
       }
     });
 
@@ -106,7 +108,8 @@ const register = async (req, res) => {
         avatar: user.avatar,
         isOnline: user.isOnline,
         publicKey: user.publicKey,
-        encryptionEnabled: user.encryptionEnabled
+        encryptionEnabled: user.encryptionEnabled,
+        hasKeyBackup: !!user.encryptedPrivateKey
       },
       encryptionSession
     });
@@ -128,8 +131,8 @@ const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Find user by email
-    const user = await User.findOne({ where: { email } });
+    // Find user by email (ignoring case)
+    const user = await User.findOne({ where: emailMatches(email) });
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -173,7 +176,8 @@ const login = async (req, res) => {
         avatar: user.avatar,
         isOnline: user.isOnline,
         publicKey: user.publicKey,
-        encryptionEnabled: user.encryptionEnabled
+        encryptionEnabled: user.encryptionEnabled,
+        hasKeyBackup: !!user.encryptedPrivateKey
       },
       encryptionSession
     });
@@ -231,7 +235,7 @@ const googleLogin = async (req, res) => {
     let user = await User.findOne({ where: { googleId } });
 
     if (!user) {
-      user = await User.findOne({ where: { email } });
+      user = await User.findOne({ where: emailMatches(email) });
 
       if (user) {
         if (!user.googleId) {
@@ -241,7 +245,7 @@ const googleLogin = async (req, res) => {
         const username = await generateUsernameFromEmail(email);
         user = await User.create({
           username,
-          email,
+          email: normalizeEmail(email),
           password: null,
           authProvider: 'google',
           googleId,
@@ -280,6 +284,7 @@ const googleLogin = async (req, res) => {
         isOnline: user.isOnline,
         publicKey: user.publicKey,
         encryptionEnabled: user.encryptionEnabled,
+        hasKeyBackup: !!user.encryptedPrivateKey,
       },
       encryptionSession,
     });
@@ -341,10 +346,12 @@ const logout = async (req, res) => {
 const getProfile = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey', 'encryptionEnabled']
+      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey', 'encryptionEnabled', 'encryptedPrivateKey']
     });
 
-    res.json({ user });
+    // hasKeyBackup tells the app whether a password can unlock this account's keys
+    const { encryptedPrivateKey, ...profile } = user.toJSON();
+    res.json({ user: { ...profile, hasKeyBackup: !!encryptedPrivateKey } });
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -431,6 +438,42 @@ const uploadKeys = async (req, res) => {
 };
 
 // Enhanced get encrypted private key with session validation
+/**
+ * First-time encryption setup for an account that has no keys yet (a Google-only
+ * account): the phone makes the key pair and keeps the private key itself, the
+ * server only stores the public key. Refuses once keys exist, so it can never
+ * replace a key other people already encrypt to.
+ */
+const registerDeviceKey = async (req, res) => {
+  try {
+    const { publicKey } = req.body;
+
+    if (typeof publicKey !== 'string' || publicKey.length < 100 || publicKey.length > 4096) {
+      return res.status(400).json({ error: 'Invalid key format' });
+    }
+
+    const currentUser = await User.findByPk(req.user.id);
+    if (currentUser.encryptionEnabled) {
+      return res.status(409).json({ error: 'Encryption is already set up for this account' });
+    }
+
+    await currentUser.update({
+      publicKey,
+      keyVersion: 1,
+      keyCreatedAt: new Date(),
+      encryptionEnabled: true
+    });
+
+    res.json({
+      success: true,
+      user: { publicKey: currentUser.publicKey, encryptionEnabled: true, hasKeyBackup: false }
+    });
+  } catch (error) {
+    console.error('Register device key error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 const getEncryptedPrivateKey = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -564,7 +607,7 @@ const updateProfile = async (req, res) => {
 
     // Get updated user data
     const updatedUser = await User.findByPk(userId, {
-      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey', 'encryptionEnabled']
+      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey', 'encryptionEnabled', 'encryptedPrivateKey']
     });
 
     res.json({
@@ -576,7 +619,8 @@ const updateProfile = async (req, res) => {
         avatar: updatedUser.avatar,
         isOnline: updatedUser.isOnline,
         publicKey: updatedUser.publicKey,
-        encryptionEnabled: updatedUser.encryptionEnabled
+        encryptionEnabled: updatedUser.encryptionEnabled,
+        hasKeyBackup: !!updatedUser.encryptedPrivateKey
       }
     });
   } catch (error) {
@@ -770,6 +814,7 @@ module.exports = {
   getUserPublicKey,
   getUserInfo,
   uploadKeys,
+  registerDeviceKey,
   getEncryptedPrivateKey,
   updateKeys,
   validateEncryptionSession,

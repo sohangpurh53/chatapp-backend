@@ -13,6 +13,7 @@ const {
   getUserPublicKey,
   getUserInfo,
   uploadKeys,
+  registerDeviceKey,
   getEncryptedPrivateKey,
   updateKeys,
   validateEncryptionSession,
@@ -35,6 +36,7 @@ router.get('/users/:userId', authenticateToken, getUserInfo);
 
 // Enhanced encryption key management endpoints
 router.post('/keys', authenticateToken, uploadKeys);
+router.post('/device-key', authenticateToken, registerDeviceKey);
 router.get('/keys', authenticateToken, getEncryptedPrivateKey);
 router.put('/keys', authenticateToken, updateKeys);
 

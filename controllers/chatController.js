@@ -301,7 +301,29 @@ const getUserChats = async (req, res) => {
 
     console.log(`Returning ${chats.length} chats to user ${userId}`);
 
-    res.json({ chats });
+    // The list carries each chat's last message. Like getChatMessages, hand the app
+    // encryptedContent as an object (the column holds JSON text, possibly compressed),
+    // or it can't decrypt the previews until the chat is opened.
+    const encryptionService = require('../services/encryptionService');
+    const chatsForClient = await Promise.all(chats.map(async (chat) => {
+      const chatData = chat.toJSON();
+      await Promise.all((chatData.messages || []).map(async (message) => {
+        if (message.isEncrypted && message.encryptedContent) {
+          try {
+            message.encryptedContent = await encryptionService.processEncryptedContentForClient(
+              message.encryptedContent,
+              message.encryptionMetadata
+            );
+          } catch (error) {
+            console.error('Failed to process encrypted content for message:', message.id, error);
+            // Keep the original content if processing fails
+          }
+        }
+      }));
+      return chatData;
+    }));
+
+    res.json({ chats: chatsForClient });
   } catch (error) {
     console.error('Get user chats error:', error);
     res.status(500).json({ error: 'Internal server error' });
