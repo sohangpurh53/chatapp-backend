@@ -12,6 +12,7 @@ const Notification = require('./Notification');
 const UserDevice = require('./UserDevice');
 const EncryptionSession = require('./EncryptionSession');
 const UserSession = require('./UserSession');
+const PasswordReset = require('./PasswordReset');
 const AiProviderConfig = require('./AiProviderConfig');
 const AiUserSettings = require('./AiUserSettings');
 const AiUsageEvent = require('./AiUsageEvent');
@@ -103,6 +104,8 @@ User.hasMany(UserDevice, { foreignKey: 'userId', as: 'devices' });
 UserDevice.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
 // Signed-in sessions (one per device login)
+User.hasMany(PasswordReset, { foreignKey: 'userId', as: 'passwordResets' });
+PasswordReset.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 User.hasMany(UserSession, { foreignKey: 'userId', as: 'sessions' });
 UserSession.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
@@ -131,6 +134,7 @@ module.exports = {
   Notification,
   UserDevice,
   UserSession,
+  PasswordReset,
   EncryptionSession,
   AiProviderConfig,
   AiUserSettings,

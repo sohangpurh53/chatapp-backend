@@ -1,10 +1,11 @@
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
-const { User, EncryptionSession } = require('../models');
+const { User, EncryptionSession, Chat, ChatParticipant, GroupChatKey } = require('../models');
 const { Op } = require('sequelize');
 const encryptionService = require('../services/encryptionService');
 const sessionService = require('../services/sessionService');
 const { normalizeEmail, emailMatches } = require('../utils/email');
+const passwordReset = require('../services/passwordReset');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -474,6 +475,98 @@ const registerDeviceKey = async (req, res) => {
   }
 };
 
+/**
+ * POST /auth/forgot-password {email}: emails a one-time code. Always answers the
+ * same, so it can't be used to find out which addresses have an account.
+ */
+const forgotPassword = async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    try {
+      await passwordReset.requestReset(email);
+    } catch (sendError) {
+      // Not the caller's business (and not a hint about the account): log and carry on
+      console.error('Password reset request failed:', sendError);
+    }
+
+    res.json({ message: 'If an account exists for that email, a reset code has been sent.' });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
+ * POST /auth/reset-password {email, code, newPassword, publicKey?, encryptedPrivateKey?, keySalt?, keyIv?}
+ *
+ * The old password also locked the private key, so an account with encryption gets
+ * a brand-new key pair (made on the phone, wrapped with the new password) and its
+ * older encrypted messages stay unreadable. Group keys addressed to the old public
+ * key are dropped and the groups flagged so the next member who sends rotates the
+ * key for everyone, including the new one. Every signed-in device is signed out.
+ */
+const resetPassword = async (req, res) => {
+  try {
+    const { code, newPassword, publicKey, encryptedPrivateKey, keySalt, keyIv } = req.body;
+    const invalidCode = () => res.status(400).json({
+      error: 'That code is invalid or has expired. Request a new one.',
+      code: 'INVALID_RESET_CODE'
+    });
+
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    }
+
+    const user = await User.findOne({ where: emailMatches(req.body.email) });
+    // Same answer as a wrong code, so this can't be used to probe for accounts
+    if (!user || !user.password) {
+      return invalidCode();
+    }
+
+    const reset = await passwordReset.verifyCode(user.id, code);
+    if (!reset) {
+      return invalidCode();
+    }
+
+    // The code is proven, so it is safe to be specific from here on (the code is not spent yet)
+    const hasKeys = !!(publicKey && encryptedPrivateKey && keySalt);
+    if (hasKeys && (publicKey.length < 100 || encryptedPrivateKey.length < 100)) {
+      return res.status(400).json({ error: 'Invalid key format' });
+    }
+    if (user.encryptionEnabled && !hasKeys) {
+      return res.status(400).json({ error: 'New encryption keys are required', code: 'KEYS_REQUIRED' });
+    }
+
+    await user.update({ password: newPassword });
+
+    if (hasKeys) {
+      await user.rotateKeys(publicKey, encryptedPrivateKey, keySalt, keyIv);
+      await EncryptionSession.update({ isActive: false }, { where: { userId: user.id } });
+
+      const memberships = await ChatParticipant.findAll({ where: { userId: user.id, isActive: true }, attributes: ['chatId'] });
+      const groups = memberships.length
+        ? await Chat.findAll({ where: { id: memberships.map(m => m.chatId), isGroup: true } })
+        : [];
+      for (const group of groups) {
+        await GroupChatKey.destroy({ where: { chatId: group.id, userId: user.id } });
+        await group.update({ settings: { ...(group.settings || {}), keyRotationNeeded: true } });
+      }
+    }
+
+    await sessionService.revokeOthers(user.id, null);
+    await passwordReset.useUp(reset);
+
+    res.json({ success: true, userId: user.id, keysReplaced: hasKeys });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 const getEncryptedPrivateKey = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -815,6 +908,8 @@ module.exports = {
   getUserInfo,
   uploadKeys,
   registerDeviceKey,
+  forgotPassword,
+  resetPassword,
   getEncryptedPrivateKey,
   updateKeys,
   validateEncryptionSession,

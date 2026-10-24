@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
+const { createRateLimiter } = require('../middleware/rateLimit');
 const {
   register,
   login,
@@ -14,6 +15,8 @@ const {
   getUserInfo,
   uploadKeys,
   registerDeviceKey,
+  forgotPassword,
+  resetPassword,
   getEncryptedPrivateKey,
   updateKeys,
   validateEncryptionSession,
@@ -23,6 +26,9 @@ const {
 router.post('/register', register);
 router.post('/login', login);
 router.post('/google', googleLogin);
+// Public, so limited by IP: asking sends an email, guessing tries a code
+router.post('/forgot-password', createRateLimiter({ name: 'forgot-password', windowMs: 15 * 60 * 1000, max: 5 }), forgotPassword);
+router.post('/reset-password', createRateLimiter({ name: 'reset-password', windowMs: 15 * 60 * 1000, max: 10 }), resetPassword);
 router.post('/refresh', refreshToken); // No auth middleware - refresh token is the credential
 router.post('/logout', authenticateToken, logout);
 router.get('/sessions', authenticateToken, require('../controllers/authController').getSessions);
