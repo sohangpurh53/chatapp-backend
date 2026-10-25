@@ -129,9 +129,11 @@ const User = sequelize.define('User', {
       if (user.changed('password')) {
         user.password = await bcrypt.hash(user.password, 10);
       }
-      // Update encryptionEnabled status
+      // Encryption is on whenever there is a public key to encrypt for. A password
+      // backup (encryptedPrivateKey) is optional: Google accounts keep the private
+      // key on their phone only, and must still receive encrypted messages.
       if (user.changed('publicKey') || user.changed('encryptedPrivateKey')) {
-        user.encryptionEnabled = !!(user.publicKey && user.encryptedPrivateKey);
+        user.encryptionEnabled = !!user.publicKey;
       }
     }
   },

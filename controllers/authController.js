@@ -372,7 +372,9 @@ const getUserPublicKey = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (!user.encryptionEnabled || !user.publicKey) {
+    // The public key alone decides: rows saved by an older version could have a key
+    // but encryptionEnabled false (keys without a password backup)
+    if (!user.publicKey) {
       return res.status(404).json({ error: 'User does not have encryption enabled' });
     }
 
