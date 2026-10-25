@@ -234,7 +234,7 @@ const getUserChats = async (req, res) => {
         userId,
         isActive: true
       },
-      attributes: ['chatId']
+      attributes: ['chatId', 'isMuted', 'mutedUntil']
     });
 
     const chatIds = userParticipations.map(p => p.chatId);
@@ -305,8 +305,38 @@ const getUserChats = async (req, res) => {
     // encryptedContent as an object (the column holds JSON text, possibly compressed),
     // or it can't decrypt the previews until the chat is opened.
     const encryptionService = require('../services/encryptionService');
+
+    // A chat you deleted comes back when it is reopened; its preview must not be one
+    // of the messages you deleted (the messages endpoint already hides them)
+    const lastMessageIds = chats.map(c => c.messages?.[0]?.id).filter(Boolean);
+    const deletedLastIds = new Set(lastMessageIds.length
+      ? (await UserMessageDeletion.findAll({
+          where: { userId, messageId: { [Op.in]: lastMessageIds } },
+          attributes: ['messageId']
+        })).map(d => d.messageId)
+      : []);
+    const myParticipation = new Map(userParticipations.map(p => [p.chatId, p]));
+
     const chatsForClient = await Promise.all(chats.map(async (chat) => {
       const chatData = chat.toJSON();
+
+      // Your own mute state for this chat (others' settings are not shared)
+      const mine = myParticipation.get(chat.id);
+      const mutedUntil = mine?.mutedUntil ? new Date(mine.mutedUntil) : null;
+      chatData.isMuted = !!mine?.isMuted && (!mutedUntil || mutedUntil > new Date());
+      chatData.mutedUntil = chatData.isMuted && mutedUntil ? mutedUntil : null;
+
+      if (chatData.messages?.[0] && deletedLastIds.has(chatData.messages[0].id)) {
+        const deletedForMe = (await UserMessageDeletion.findAll({ where: { userId }, attributes: ['messageId'] }))
+          .map(d => d.messageId);
+        const visible = await Message.findOne({
+          where: { chatId: chat.id, id: { [Op.notIn]: deletedForMe } },
+          order: [['createdAt', 'DESC']],
+          include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'avatar'] }]
+        });
+        chatData.messages = visible ? [visible.toJSON()] : [];
+      }
+
       await Promise.all((chatData.messages || []).map(async (message) => {
         if (message.isEncrypted && message.encryptedContent) {
           try {
