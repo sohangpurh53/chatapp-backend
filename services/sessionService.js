@@ -13,6 +13,7 @@ let io = null;
 const cache = new Map();
 
 const setIO = (socketIO) => { io = socketIO; };
+const getIO = () => io;
 
 const header = (req, name) => {
   const value = req?.headers?.[name];
@@ -148,6 +149,7 @@ const revokeOthers = async (userId, currentSid) => {
 module.exports = {
   MAX_ACTIVE_SESSIONS,
   setIO,
+  getIO,
   deviceFromRequest,
   createSession,
   validateSession,

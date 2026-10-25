@@ -13,6 +13,7 @@ const UserDevice = require('./UserDevice');
 const EncryptionSession = require('./EncryptionSession');
 const UserSession = require('./UserSession');
 const PasswordReset = require('./PasswordReset');
+const DeviceLink = require('./DeviceLink');
 const AiProviderConfig = require('./AiProviderConfig');
 const AiUserSettings = require('./AiUserSettings');
 const AiUsageEvent = require('./AiUsageEvent');
@@ -106,6 +107,8 @@ UserDevice.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 // Signed-in sessions (one per device login)
 User.hasMany(PasswordReset, { foreignKey: 'userId', as: 'passwordResets' });
 PasswordReset.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+User.hasMany(DeviceLink, { foreignKey: 'userId', as: 'deviceLinks' });
+DeviceLink.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 User.hasMany(UserSession, { foreignKey: 'userId', as: 'sessions' });
 UserSession.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
@@ -135,6 +138,7 @@ module.exports = {
   UserDevice,
   UserSession,
   PasswordReset,
+  DeviceLink,
   EncryptionSession,
   AiProviderConfig,
   AiUserSettings,
