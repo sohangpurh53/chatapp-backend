@@ -74,6 +74,13 @@ describe('link a new phone', () => {
       assert.equal(emitted[0].data.deviceName, 'POCO M2007J20CI');
     });
 
+    test('says how long the request lasts, so a phone with a wrong clock does not give up early', async () => {
+      const res = await call(deviceLink.requestLink, { sessionId: 'new-phone', body: { publicKey: KEY } });
+
+      assert.ok(res.body.expiresInMs > deviceLink.LINK_TTL_MS - 5000 && res.body.expiresInMs <= deviceLink.LINK_TTL_MS);
+      assert.ok(emitted[0].data.expiresInMs > deviceLink.LINK_TTL_MS - 5000);
+    });
+
     test('rejects something that is not a public key', async () => {
       const res = await call(deviceLink.requestLink, { sessionId: 'new-phone', body: { publicKey: 'short' } });
 
@@ -88,7 +95,10 @@ describe('link a new phone', () => {
       await call(deviceLink.requestLink, { sessionId: 'new-phone', body: { publicKey: KEY } });
 
       assert.equal(closed.changes.status, 'declined');
-      assert.deepEqual(closed.where, { userId: 'u1', requesterSessionId: 'new-phone', status: 'pending' });
+      assert.equal(closed.changes.payload, null);
+      assert.equal(closed.where.requesterSessionId, 'new-phone');
+      // Keys approved for the last request but never collected go too
+      assert.deepEqual(closed.where.status[require('sequelize').Op.in], ['pending', 'approved']);
     });
   });
 

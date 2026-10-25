@@ -18,11 +18,15 @@ const emit = (room, event, data, exceptRoom) => {
 
 const openLink = (link) => link.status === 'pending' && new Date(link.expiresAt) > new Date();
 
+// Phones count down from expiresInMs: their clocks can be off from the server's
+const msLeft = (link) => Math.max(new Date(link.expiresAt).getTime() - Date.now(), 0);
+
 const describeLink = (link) => ({
   linkId: link.id,
   deviceName: link.requesterName || 'A new phone',
   publicKey: link.linkPublicKey,
-  expiresAt: link.expiresAt
+  expiresAt: link.expiresAt,
+  expiresInMs: msLeft(link)
 });
 
 /** POST /auth/device-link {publicKey}: this phone asks the account's other phones for the keys. */
@@ -36,10 +40,10 @@ const requestLink = async (req, res) => {
       return res.status(400).json({ error: 'Sign in again to link this phone' });
     }
 
-    // One open request per phone: a new one replaces the last
+    // One open request per phone: a new one replaces the last (and drops keys it never collected)
     await DeviceLink.update(
       { status: 'declined', payload: null },
-      { where: { userId: req.user.id, requesterSessionId: req.sessionId, status: 'pending' } }
+      { where: { userId: req.user.id, requesterSessionId: req.sessionId, status: { [Op.in]: ['pending', 'approved'] } } }
     );
 
     const session = await UserSession.findOne({ where: { id: req.sessionId, userId: req.user.id } });
@@ -53,7 +57,7 @@ const requestLink = async (req, res) => {
 
     emit(`user_${req.user.id}`, 'device_link_request', describeLink(link), `session_${req.sessionId}`);
 
-    res.status(201).json({ linkId: link.id, expiresAt: link.expiresAt });
+    res.status(201).json({ linkId: link.id, expiresAt: link.expiresAt, expiresInMs: msLeft(link) });
   } catch (error) {
     console.error('Device link request error:', error);
     res.status(500).json({ error: 'Internal server error' });
