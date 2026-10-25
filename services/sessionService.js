@@ -33,7 +33,11 @@ const notifyRevoked = (session, reason) => {
   cache.delete(session.id);
   if (!io) return;
   const room = `session_${session.id}`;
-  io.to(room).emit('session_revoked', { sessionId: session.id, reason });
+  // A device logging itself out must not hear "revoked": the app treats that as a
+  // remote sign-out and deletes this phone's encryption keys
+  if (reason !== 'logout') {
+    io.to(room).emit('session_revoked', { sessionId: session.id, reason });
+  }
   // Give the event a moment to arrive before cutting the connection
   setTimeout(() => io.in(room).disconnectSockets(true), 500);
 };
