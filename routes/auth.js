@@ -15,6 +15,7 @@ const {
   getUserInfo,
   uploadKeys,
   registerDeviceKey,
+  resetDeviceKey,
   forgotPassword,
   resetPassword,
   getEncryptedPrivateKey,
@@ -43,6 +44,7 @@ router.get('/users/:userId', authenticateToken, getUserInfo);
 // Enhanced encryption key management endpoints
 router.post('/keys', authenticateToken, uploadKeys);
 router.post('/device-key', authenticateToken, registerDeviceKey);
+router.post('/device-key/reset', authenticateToken, createRateLimiter({ name: 'device-key-reset', windowMs: 15 * 60 * 1000, max: 5 }), resetDeviceKey);
 router.get('/keys', authenticateToken, getEncryptedPrivateKey);
 router.put('/keys', authenticateToken, updateKeys);
 

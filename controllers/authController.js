@@ -476,6 +476,71 @@ const registerDeviceKey = async (req, res) => {
 };
 
 /**
+ * After a user's key pair is replaced, the group keys addressed to the old public key
+ * are useless: drop them and flag each group so the next member who sends rotates the
+ * key for everyone, the new public key included. Old sessions for the old key end too.
+ */
+const retireOldKeyCopies = async (userId) => {
+  await EncryptionSession.update({ isActive: false }, { where: { userId } });
+  const memberships = await ChatParticipant.findAll({ where: { userId, isActive: true }, attributes: ['chatId'] });
+  const groups = memberships.length
+    ? await Chat.findAll({ where: { id: memberships.map(m => m.chatId), isGroup: true } })
+    : [];
+  for (const group of groups) {
+    await GroupChatKey.destroy({ where: { chatId: group.id, userId } });
+    await group.update({ settings: { ...(group.settings || {}), keyRotationNeeded: true } });
+  }
+};
+
+/**
+ * POST /auth/device-key/reset {publicKey, idToken}: "Start fresh" for an account whose
+ * keys only ever lived on a phone it no longer has (Google signup, then a reinstall, a
+ * new phone or a remote sign-out). The phone made a new pair; the server swaps in the
+ * public key. A fresh Google sign-in is required, so a stolen app session alone cannot
+ * swap the keys and read what people send next. Accounts with a password backup are
+ * refused: their password unlocks the existing keys and keeps their old messages.
+ */
+const resetDeviceKey = async (req, res) => {
+  try {
+    const { publicKey, idToken } = req.body;
+
+    if (typeof publicKey !== 'string' || publicKey.length < 100 || publicKey.length > 4096) {
+      return res.status(400).json({ error: 'Invalid key format' });
+    }
+    if (typeof idToken !== 'string' || !idToken) {
+      return res.status(400).json({ error: 'Confirm with your Google account first', code: 'GOOGLE_CONFIRMATION_REQUIRED' });
+    }
+
+    const user = await User.findByPk(req.user.id);
+    if (user.encryptedPrivateKey) {
+      return res.status(409).json({
+        error: 'Your ChatApp password unlocks your existing keys and keeps your messages',
+        code: 'HAS_PASSWORD_BACKUP'
+      });
+    }
+
+    let payload;
+    try {
+      const ticket = await googleClient.verifyIdToken({ idToken, audience: process.env.GOOGLE_CLIENT_ID });
+      payload = ticket.getPayload();
+    } catch (verifyError) {
+      return res.status(401).json({ error: 'Google confirmation failed. Try again.', code: 'GOOGLE_CONFIRMATION_FAILED' });
+    }
+    if (!user.googleId || payload.sub !== user.googleId) {
+      return res.status(403).json({ error: 'Confirm with the Google account this ChatApp account uses', code: 'GOOGLE_ACCOUNT_MISMATCH' });
+    }
+
+    await user.rotateKeys(publicKey, null, null, null);
+    await retireOldKeyCopies(user.id);
+
+    res.json({ success: true, user: { publicKey: user.publicKey, encryptionEnabled: true, hasKeyBackup: false } });
+  } catch (error) {
+    console.error('Reset device key error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
  * POST /auth/forgot-password {email}: emails a one-time code. Always answers the
  * same, so it can't be used to find out which addresses have an account.
  */
@@ -503,9 +568,9 @@ const forgotPassword = async (req, res) => {
 /**
  * POST /auth/reset-password {email, code, newPassword, publicKey?, encryptedPrivateKey?, keySalt?, keyIv?}
  *
- * The old password also locked the private key, so an account with encryption gets
- * a brand-new key pair (made on the phone, wrapped with the new password) and its
- * older encrypted messages stay unreadable. Group keys addressed to the old public
+ * The old password also locked the private key. When the phone still has the account's
+ * keys it sends the SAME public key re-locked with the new password: nothing is lost.
+ * Otherwise it sends a brand-new key pair and older encrypted messages stay unreadable. Group keys addressed to the old public
  * key are dropped and the groups flagged so the next member who sends rotates the
  * key for everyone, including the new one. Every signed-in device is signed out.
  */
@@ -543,24 +608,20 @@ const resetPassword = async (req, res) => {
 
     await user.update({ password: newPassword });
 
-    if (hasKeys) {
+    // The phone still had this account's keys and re-locked them with the new password:
+    // same key pair, so only the backup changes and every old message stays readable
+    const keysKept = hasKeys && !!user.publicKey && publicKey === user.publicKey;
+    if (keysKept) {
+      await user.update({ encryptedPrivateKey, keySalt, keyIv: keyIv || keySalt });
+    } else if (hasKeys) {
       await user.rotateKeys(publicKey, encryptedPrivateKey, keySalt, keyIv);
-      await EncryptionSession.update({ isActive: false }, { where: { userId: user.id } });
-
-      const memberships = await ChatParticipant.findAll({ where: { userId: user.id, isActive: true }, attributes: ['chatId'] });
-      const groups = memberships.length
-        ? await Chat.findAll({ where: { id: memberships.map(m => m.chatId), isGroup: true } })
-        : [];
-      for (const group of groups) {
-        await GroupChatKey.destroy({ where: { chatId: group.id, userId: user.id } });
-        await group.update({ settings: { ...(group.settings || {}), keyRotationNeeded: true } });
-      }
+      await retireOldKeyCopies(user.id);
     }
 
     await sessionService.revokeOthers(user.id, null);
     await passwordReset.useUp(reset);
 
-    res.json({ success: true, userId: user.id, keysReplaced: hasKeys });
+    res.json({ success: true, userId: user.id, keysReplaced: hasKeys && !keysKept, keysKept });
   } catch (error) {
     console.error('Reset password error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -908,6 +969,7 @@ module.exports = {
   getUserInfo,
   uploadKeys,
   registerDeviceKey,
+  resetDeviceKey,
   forgotPassword,
   resetPassword,
   getEncryptedPrivateKey,

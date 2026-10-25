@@ -213,7 +213,7 @@ describe('resetPassword endpoint', () => {
     assert.equal(user.password, 'newpass1');
     assert.deepEqual(revoked, { userId: 'u1', except: null });
     assert.equal(used, true);
-    assert.deepEqual(res.body, { success: true, userId: 'u1', keysReplaced: false });
+    assert.deepEqual(res.body, { success: true, userId: 'u1', keysReplaced: false, keysKept: false });
   });
 
   test('replaces the keys of an encrypted account and has groups rotate theirs', async () => {
@@ -230,6 +230,24 @@ describe('resetPassword endpoint', () => {
       ['g1', { settings: { onlyAdminsCanSend: true, keyRotationNeeded: true } }],
       ['g2', { settings: { keyRotationNeeded: true } }],
     ]);
+  });
+
+  test('keeps every chat when the phone re-locked the same keys with the new password', async () => {
+    user.encryptionEnabled = true;
+    user.publicKey = KEY;
+
+    const res = await call({ publicKey: KEY, encryptedPrivateKey: 'W'.repeat(200), keySalt: 'salt2', keyIv: 'iv2' });
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.keysKept, true);
+    assert.equal(res.body.keysReplaced, false);
+    assert.equal(user.rotatedWith, undefined, 'the key pair is not replaced');
+    assert.equal(user.encryptedPrivateKey, 'W'.repeat(200));
+    assert.equal(user.keySalt, 'salt2');
+    assert.equal(user.keyIv, 'iv2');
+    assert.equal(deactivated, null, 'sessions for the key stay valid');
+    assert.deepEqual(droppedKeys, [], 'group keys stay valid');
+    assert.deepEqual(groupUpdates, []);
   });
 
   test('refuses an encrypted account without new keys, and keeps the code usable', async () => {
