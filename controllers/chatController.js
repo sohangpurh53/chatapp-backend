@@ -1,5 +1,6 @@
 const { Chat, User, Message, ChatParticipant, MessageReceipt, GroupInvite, UserMessageDeletion } = require('../models');
 const { Op } = require('sequelize');
+const { isUuid, ZERO_UUID } = require('../utils/ids');
 const {
   isAdminRole,
   DEFAULT_GROUP_SETTINGS,
@@ -360,6 +361,70 @@ const getUserChats = async (req, res) => {
   }
 };
 
+// Everything the app needs to show a message: sender, reply preview, receipts
+const clientMessageIncludes = () => [
+  {
+    model: User,
+    as: 'sender',
+    attributes: ['id', 'username', 'avatar']
+  },
+  {
+    model: User,
+    as: 'receiver',
+    attributes: ['id', 'username', 'avatar'],
+    required: false
+  },
+  {
+    model: Message,
+    as: 'replyTo',
+    attributes: ['id', 'content', 'messageType', 'encryptedContent', 'isEncrypted', 'keyId'],
+    include: [{
+      model: User,
+      as: 'sender',
+      attributes: ['id', 'username']
+    }],
+    required: false
+  },
+  {
+    model: MessageReceipt,
+    as: 'receipts',
+    include: [{
+      model: User,
+      as: 'user',
+      attributes: ['id', 'username']
+    }],
+    required: false
+  }
+];
+
+/** Plain message objects with encryptedContent parsed and read receipts masked for the viewer. */
+const prepareMessagesForClient = async (messages, userId) => {
+  // Process encrypted content for each message
+  const encryptionService = require('../services/encryptionService');
+  const processedMessages = await Promise.all(messages.map(async (message) => {
+    const messageData = message.toJSON();
+    
+    if (messageData.isEncrypted && messageData.encryptedContent) {
+      try {
+        messageData.encryptedContent = await encryptionService.processEncryptedContentForClient(
+          messageData.encryptedContent,
+          messageData.encryptionMetadata
+        );
+      } catch (error) {
+        console.error('Failed to process encrypted content for message:', messageData.id, error);
+        // Keep original content if processing fails
+      }
+    }
+    
+    return messageData;
+  }));
+
+  // Respect read-receipt privacy (reader's and viewer's)
+  const { maskReadReceipts } = require('../services/readReceipts');
+  await maskReadReceipts(processedMessages, userId);
+  return processedMessages;
+};
+
 const getChatMessages = async (req, res) => {
   try {
     const { chatId } = req.params;
@@ -387,85 +452,120 @@ const getChatMessages = async (req, res) => {
     });
     const deletedMessageIds = userDeletedMessages.map(d => d.messageId);
 
+    const where = {
+      chatId,
+      // ✅ FIX: Exclude messages deleted for everyone (they should be completely removed from DB now)
+      // Since we're now using message.destroy() instead of marking as deleted,
+      // deleted messages won't appear in results automatically
+
+      // Exclude messages deleted by this user
+      id: { [Op.notIn]: deletedMessageIds }
+    };
+
+    // Older history by cursor (?before=<createdAt>&beforeId=<id>): the messages just
+    // before the oldest one the app has. Unlike page numbers, it can't skip or
+    // repeat messages when new ones arrive meanwhile.
+    const before = req.query.before ? new Date(req.query.before) : null;
+    const useCursor = before && !Number.isNaN(before.getTime());
+    if (useCursor) {
+      const beforeId = isUuid(req.query.beforeId) ? req.query.beforeId : null;
+      where[Op.and] = [{
+        [Op.or]: [
+          { createdAt: { [Op.lt]: before } },
+          ...(beforeId ? [{ createdAt: before, id: { [Op.lt]: beforeId } }] : [])
+        ]
+      }];
+    }
+
     const messages = await Message.findAll({
-      where: { 
-        chatId,
-        // ✅ FIX: Exclude messages deleted for everyone (they should be completely removed from DB now)
-        // Since we're now using message.destroy() instead of marking as deleted,
-        // deleted messages won't appear in results automatically
-        
-        // Exclude messages deleted by this user
-        id: { [Op.notIn]: deletedMessageIds }
-      },
-      include: [
-        {
-          model: User,
-          as: 'sender',
-          attributes: ['id', 'username', 'avatar']
-        },
-        {
-          model: User,
-          as: 'receiver',
-          attributes: ['id', 'username', 'avatar'],
-          required: false
-        },
-        {
-          model: Message,
-          as: 'replyTo',
-          attributes: ['id', 'content', 'messageType', 'encryptedContent', 'isEncrypted', 'keyId'],
-          include: [{
-            model: User,
-            as: 'sender',
-            attributes: ['id', 'username']
-          }],
-          required: false
-        },
-        {
-          model: MessageReceipt,
-          as: 'receipts',
-          include: [{
-            model: User,
-            as: 'user',
-            attributes: ['id', 'username']
-          }],
-          required: false
-        }
-      ],
+      where,
+      include: clientMessageIncludes(),
       attributes: {
         include: ['encryptedContent', 'isEncrypted', 'keyId']
       },
-      order: [['createdAt', 'DESC']],
-      limit: parseInt(limit),
-      offset: parseInt(offset)
+      order: [['createdAt', 'DESC'], ['id', 'DESC']],
+      limit: Math.min(parseInt(limit) || 50, 200),
+      offset: useCursor ? 0 : parseInt(offset)
     });
 
-    // Process encrypted content for each message
-    const encryptionService = require('../services/encryptionService');
-    const processedMessages = await Promise.all(messages.map(async (message) => {
-      const messageData = message.toJSON();
-      
-      if (messageData.isEncrypted && messageData.encryptedContent) {
-        try {
-          messageData.encryptedContent = await encryptionService.processEncryptedContentForClient(
-            messageData.encryptedContent,
-            messageData.encryptionMetadata
-          );
-        } catch (error) {
-          console.error('Failed to process encrypted content for message:', messageData.id, error);
-          // Keep original content if processing fails
-        }
-      }
-      
-      return messageData;
-    }));
-
-    // Respect read-receipt privacy (reader's and viewer's)
-    const { maskReadReceipts } = require('../services/readReceipts');
-    await maskReadReceipts(processedMessages, userId);
+    const processedMessages = await prepareMessagesForClient(messages, userId);
 
     res.json({ messages: processedMessages.reverse() });
   } catch (error) {
     console.error('Get chat messages error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+const SYNC_PAGE_DEFAULT = 100;
+const SYNC_PAGE_MAX = 200;
+
+/**
+ * GET /chat/sync?since=<ISO>&sinceId=<uuid>&limit=<n>
+ * Messages in all of the user's chats that come after the cursor, oldest first,
+ * ordered by (createdAt, id) so pages never skip or repeat a message. The app
+ * stores `cursor` and passes it back next time (it starts a little earlier to
+ * catch messages that were committed late, and drops the ones it already has).
+ * Without `since` the device has no cursor yet: it gets "now" to start from,
+ * since its history comes from the chat list and each chat's own page.
+ */
+const syncMessages = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || SYNC_PAGE_DEFAULT, 1), SYNC_PAGE_MAX);
+
+    if (!req.query.since) {
+      return res.json({ messages: [], hasMore: false, cursor: { since: new Date().toISOString(), sinceId: ZERO_UUID } });
+    }
+    const since = new Date(req.query.since);
+    if (Number.isNaN(since.getTime())) {
+      return res.status(400).json({ error: 'Invalid since' });
+    }
+    const sinceId = isUuid(req.query.sinceId) ? req.query.sinceId : ZERO_UUID;
+    const unchanged = { since: since.toISOString(), sinceId };
+
+    const participations = await ChatParticipant.findAll({
+      where: { userId, isActive: true },
+      attributes: ['chatId']
+    });
+    const chatIds = participations.map(p => p.chatId);
+    if (chatIds.length === 0) {
+      return res.json({ messages: [], hasMore: false, cursor: unchanged });
+    }
+
+    const deletions = await UserMessageDeletion.findAll({ where: { userId }, attributes: ['messageId'] });
+    const where = {
+      chatId: { [Op.in]: chatIds },
+      [Op.or]: [
+        { createdAt: { [Op.gt]: since } },
+        { createdAt: since, id: { [Op.gt]: sinceId } }
+      ]
+    };
+    if (deletions.length) {
+      where.id = { [Op.notIn]: deletions.map(d => d.messageId) };
+    }
+
+    const rows = await Message.findAll({
+      where,
+      include: clientMessageIncludes(),
+      attributes: {
+        include: ['encryptedContent', 'isEncrypted', 'keyId']
+      },
+      order: [['createdAt', 'ASC'], ['id', 'ASC']],
+      limit: limit + 1
+    });
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const messages = await prepareMessagesForClient(page, userId);
+    const last = page[page.length - 1];
+    const cursor = last
+      ? { since: new Date(last.createdAt).toISOString(), sinceId: last.id }
+      : unchanged;
+
+    res.json({ messages, hasMore, cursor });
+  } catch (error) {
+    console.error('Sync messages error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -1641,6 +1741,7 @@ module.exports = {
   createChat,
   getUserChats,
   getChatMessages,
+  syncMessages,
   searchUsers,
   inviteToGroup,
   respondToGroupInvite,

@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const redisService = require('../config/redis');
 const { v4: uuidv4 } = require('uuid');
 const notificationService = require('../services/notificationService');
+const { isUuid } = require('../utils/ids');
 
 class SocketHandlers {
   constructor(io) {
@@ -45,41 +46,32 @@ class SocketHandlers {
     // Join user to their chat rooms
     this.joinUserChats(socket);
 
-    // NEW: Sync pending messages when user connects
-    this.syncPendingMessages(socket);
+    // Apps that speak sync protocol 2 fetch missed messages themselves (GET /chat/sync)
+    // and confirm delivery with 'messages_delivered'; older apps get them pushed
+    socket.data.syncProtocol = Number(socket.handshake?.auth?.syncProtocol) || 1;
+    // What this server can do: apps only rely on acknowledged, de-duplicated sends
+    // and GET /chat/sync once a server says so (an older server would ignore the
+    // acknowledgement and store every retry as a new message)
+    socket.emit('server_features', { messageAck: true, sync: true });
+    if (socket.data.syncProtocol < 2) {
+      this.syncPendingMessages(socket);
+    }
 
     // Send current online users list to the newly connected user
     const onlineUserIds = Array.from(this.connectedUsers.keys());
     socket.emit('online-users-list', {
       users: onlineUserIds
     });
-    
+
     console.log(`[ONLINE USERS] Total online: ${onlineUserIds.length}`);
 
-    // Deliver any pending signals that were stored while user was offline
-    try {
-      const pending = await redisService.getPendingSignalsForUser(socket.userId);
-      for (const callId of Object.keys(pending)) {
-        const signals = pending[callId];
-        for (const sig of signals) {
-          console.log(`📤 Delivering pending signal for call ${callId} to user ${socket.userId}`);
-          socket.emit('call_signal', {
-            callId,
-            signal: sig.payload,
-            fromUserId: sig.payload.fromUserId || null
-          });
-        }
-        // Remove delivered pending signals
-        await redisService.deletePendingSignals(socket.userId, callId);
-      }
-    } catch (err) {
-      console.error('Error delivering pending signals on connect:', err);
-    }
-
-    // Handle events
+    // Handle events. Registered before anything below awaits: an app with queued
+    // messages sends them the moment it connects, and an event that arrives before
+    // its handler exists is dropped.
     socket.on('join_chat', (data) => this.handleJoinChat(socket, data));
     socket.on('leave_chat', (data) => this.handleLeaveChat(socket, data));
-    socket.on('send_message', (data) => this.handleSendMessage(socket, data));
+    socket.on('send_message', (data, ack) => this.handleSendMessage(socket, data, ack));
+    socket.on('messages_delivered', (data) => this.handleMessagesDelivered(socket, data));
     socket.on('typing_start', (data) => this.handleTypingStart(socket, data));
     socket.on('typing_stop', (data) => this.handleTypingStop(socket, data));
     socket.on('message_read', (data) => this.handleMessageRead(socket, data));
@@ -105,6 +97,26 @@ class SocketHandlers {
     socket.on('stop_screen_share', (data) => this.handleStopScreenShare(socket, data));
 
     socket.on('disconnect', () => this.handleDisconnect(socket));
+
+    // Deliver any pending signals that were stored while user was offline
+    try {
+      const pending = await redisService.getPendingSignalsForUser(socket.userId);
+      for (const callId of Object.keys(pending)) {
+        const signals = pending[callId];
+        for (const sig of signals) {
+          console.log(`📤 Delivering pending signal for call ${callId} to user ${socket.userId}`);
+          socket.emit('call_signal', {
+            callId,
+            signal: sig.payload,
+            fromUserId: sig.payload.fromUserId || null
+          });
+        }
+        // Remove delivered pending signals
+        await redisService.deletePendingSignals(socket.userId, callId);
+      }
+    } catch (err) {
+      console.error('Error delivering pending signals on connect:', err);
+    }
   }
 
   async joinUserChats(socket) {
@@ -180,7 +192,9 @@ class SocketHandlers {
             'encryptionVersion'
           ]
         },
-        order: [['createdAt', 'ASC']] // Oldest first
+        order: [['createdAt', 'ASC']], // Oldest first
+        // One socket payload; anything beyond this arrives through the chat's own page
+        limit: 500
       });
 
       if (pendingMessages.length > 0) {
@@ -202,6 +216,7 @@ class SocketHandlers {
           {
             where: {
               userId: socket.userId,
+              messageId: { [Op.in]: pendingMessages.map(m => m.id) },
               status: { [Op.in]: ['pending', 'sent'] }
             }
           }
@@ -238,15 +253,24 @@ class SocketHandlers {
     });
   }
 
-  async handleSendMessage(socket, data) {
+  async handleSendMessage(socket, data, ack) {
+    // The app's outbox passes an acknowledgement callback and learns the outcome
+    // there; the 'error' / 'message_sent' events still go out for older apps
+    const respond = typeof ack === 'function' ? ack : () => {};
+    const clientMessageId = data?.clientMessageId;
+    const fail = (payload, retryable = false) => {
+      socket.emit('error', clientMessageId ? { ...payload, clientMessageId } : payload);
+      respond({ ok: false, clientMessageId, retryable, ...payload });
+    };
+
     try {
-      const { 
-        chatId, 
-        content, 
-        messageType = 'text', 
-        fileUrl, 
-        fileName, 
-        fileSize, 
+      const {
+        chatId,
+        content,
+        messageType = 'text',
+        fileUrl,
+        fileName,
+        fileSize,
         replyToId,
         encryptedContent,
         isEncrypted = false,
@@ -263,6 +287,25 @@ class SocketHandlers {
         keyId: keyId ? keyId.substring(0, 20) + '...' : null
       });
 
+      // A message the app sends again (it never heard back, or restarted) is
+      // acknowledged with the stored copy instead of being stored twice. Checked
+      // before slow mode, which would otherwise count the first copy against it.
+      if (clientMessageId !== undefined) {
+        if (!isUuid(clientMessageId)) {
+          fail({ message: 'Invalid message id', code: 'INVALID_MESSAGE_ID', chatId });
+          return;
+        }
+        const existing = await Message.findByPk(clientMessageId, { attributes: ['id', 'senderId', 'chatId', 'createdAt'] });
+        if (existing) {
+          if (existing.senderId !== socket.userId || existing.chatId !== chatId) {
+            fail({ message: 'Message id already in use', code: 'MESSAGE_ID_CONFLICT', chatId });
+            return;
+          }
+          this.acknowledgeSent(socket, respond, existing, true);
+          return;
+        }
+      }
+
       // Verify user is participant
       const participant = await ChatParticipant.findOne({
         where: {
@@ -273,14 +316,14 @@ class SocketHandlers {
       });
 
       if (!participant) {
-        socket.emit('error', { message: 'Access denied' });
+        fail({ message: 'Access denied', code: 'ACCESS_DENIED', chatId });
         return;
       }
 
       // Get chat info to determine if it's direct or group
       const chat = await Chat.findByPk(chatId);
       if (!chat) {
-        socket.emit('error', { message: 'Chat not found' });
+        fail({ message: 'Chat not found', code: 'CHAT_NOT_FOUND', chatId });
         return;
       }
 
@@ -289,7 +332,7 @@ class SocketHandlers {
         const isAdmin = participant.role === 'admin' || participant.role === 'moderator';
         const groupSettings = chat.settings || {};
         if (!isAdmin && groupSettings.onlyAdminsCanSend) {
-          socket.emit('error', { message: 'Only admins can send messages to this group', code: 'ADMINS_ONLY', chatId });
+          fail({ message: 'Only admins can send messages to this group', code: 'ADMINS_ONLY', chatId });
           return;
         }
         const slowModeSeconds = Number(groupSettings.slowModeSeconds) || 0;
@@ -301,12 +344,12 @@ class SocketHandlers {
           });
           const waitMs = lastOwn ? slowModeSeconds * 1000 - (Date.now() - new Date(lastOwn.createdAt).getTime()) : 0;
           if (waitMs > 0) {
-            socket.emit('error', {
+            fail({
               message: `Slow mode is on. You can send again in ${Math.ceil(waitMs / 1000)}s`,
               code: 'SLOW_MODE',
               chatId,
               retryAfter: Math.ceil(waitMs / 1000)
-            });
+            }, true);
             return;
           }
         }
@@ -341,7 +384,7 @@ class SocketHandlers {
         
         if (!validation.valid) {
           console.error('❌ Invalid encrypted message format:', validation.error);
-          socket.emit('error', { message: `Invalid encryption format: ${validation.error}` });
+          fail({ message: `Invalid encryption format: ${validation.error}`, code: 'INVALID_ENCRYPTION', chatId });
           return;
         }
 
@@ -406,8 +449,22 @@ class SocketHandlers {
         replyToId,
         status: 'sent'
       };
+      if (clientMessageId) messageData.id = clientMessageId;
 
-      const message = await Message.create(messageData);
+      let message;
+      try {
+        message = await Message.create(messageData);
+      } catch (createError) {
+        // The same message sent twice at once: the other copy won, acknowledge it
+        if (clientMessageId && createError.name === 'SequelizeUniqueConstraintError') {
+          const stored = await Message.findByPk(clientMessageId, { attributes: ['id', 'senderId', 'chatId', 'createdAt'] });
+          if (stored && stored.senderId === socket.userId) {
+            this.acknowledgeSent(socket, respond, stored, true);
+            return;
+          }
+        }
+        throw createError;
+      }
 
       // Fetch complete message data with sender's public key
       const completeMessage = await Message.findByPk(message.id, {
@@ -453,7 +510,7 @@ class SocketHandlers {
 
       if (!completeMessage || !completeMessage.sender) {
         console.error(`❌ Failed to fetch complete message data for message ${message.id}`);
-        socket.emit('error', { message: 'Failed to fetch message data' });
+        fail({ message: 'Failed to fetch message data', code: 'SEND_FAILED', chatId }, true);
         return;
       }
 
@@ -472,13 +529,14 @@ class SocketHandlers {
         }
       });
 
-      for (const participant of participants) {
-        await MessageReceipt.create({
-          messageId: message.id,
-          userId: participant.userId,
-          status: 'delivered'
-        });
-      }
+      // A receipt says "delivered" only once the message reached the person's
+      // phone: apps on sync protocol 2 confirm that themselves. Older apps can't,
+      // so for them being connected right now still counts, as it always has.
+      await MessageReceipt.bulkCreate(participants.map(participant => ({
+        messageId: message.id,
+        userId: participant.userId,
+        status: this.isConnectedLegacyApp(participant.userId) ? 'delivered' : 'sent'
+      })));
 
       // Process encrypted content before emitting
       const messageToEmit = completeMessage.toJSON();
@@ -515,13 +573,8 @@ class SocketHandlers {
         participantCount: participants.length
       });
 
-      // Immediate acknowledgment to sender
-      socket.emit('message_sent', {
-        messageId: message.id,
-        status: 'sent',
-        timestamp: new Date(),
-        isEncrypted: message.isEncrypted
-      });
+      // Stored and broadcast: tell the sender
+      this.acknowledgeSent(socket, respond, message, false);
 
       // Send FCM notifications to offline participants
       const notificationService = require('../services/notificationService');
@@ -549,24 +602,93 @@ class SocketHandlers {
 
     } catch (error) {
       console.error('Send message error:', error);
-      
+      const chatId = data?.chatId;
+
       // Enhanced error reporting for encryption issues
       if (error.message.includes('too long for type')) {
-        socket.emit('error', { 
+        fail({
           message: 'Message content too large. Please try a shorter message or enable compression.',
-          code: 'MESSAGE_TOO_LARGE'
+          code: 'MESSAGE_TOO_LARGE',
+          chatId
         });
       } else if (error.message.includes('encryption')) {
-        socket.emit('error', { 
+        fail({
           message: 'Encryption error. Please check your encryption settings.',
-          code: 'ENCRYPTION_ERROR'
+          code: 'ENCRYPTION_ERROR',
+          chatId
         });
       } else {
-        socket.emit('error', { 
+        // Database or server trouble: worth trying again
+        fail({
           message: 'Failed to send message',
-          code: 'SEND_FAILED'
+          code: 'SEND_FAILED',
+          chatId
+        }, true);
+      }
+    }
+  }
+
+  /** 'message_sent' (all apps) and the outbox's acknowledgement for a stored message. */
+  acknowledgeSent(socket, respond, message, duplicate) {
+    const createdAt = message.createdAt instanceof Date ? message.createdAt.toISOString() : message.createdAt;
+    socket.emit('message_sent', {
+      messageId: message.id,
+      clientMessageId: message.id,
+      chatId: message.chatId,
+      status: 'sent',
+      timestamp: new Date(),
+      createdAt,
+      isEncrypted: message.isEncrypted
+    });
+    respond({ ok: true, messageId: message.id, clientMessageId: message.id, createdAt, duplicate });
+  }
+
+  /** Connected with an app that can't confirm delivery itself (sync protocol 1). */
+  isConnectedLegacyApp(userId) {
+    const socketId = this.connectedUsers.get(userId);
+    if (!socketId) return false;
+    const userSocket = this.io.sockets?.sockets?.get(socketId);
+    return !!userSocket && (userSocket.data?.syncProtocol || 1) < 2;
+  }
+
+  /**
+   * The app stored these messages on the phone: their receipts become "delivered"
+   * and each sender hears about it. Only this user's own receipts change, and a
+   * receipt that is already "delivered" or "read" stays as it is.
+   */
+  async handleMessagesDelivered(socket, data) {
+    try {
+      const ids = Array.isArray(data?.messageIds)
+        ? [...new Set(data.messageIds.filter(isUuid))].slice(0, 500)
+        : [];
+      if (ids.length === 0) return;
+
+      const receipts = await MessageReceipt.findAll({
+        where: { messageId: { [Op.in]: ids }, userId: socket.userId, status: { [Op.in]: ['pending', 'sent'] } },
+        attributes: ['id', 'messageId']
+      });
+      if (receipts.length === 0) return;
+
+      const deliveredAt = new Date();
+      await MessageReceipt.update(
+        { status: 'delivered', timestamp: deliveredAt },
+        { where: { id: { [Op.in]: receipts.map(r => r.id) }, status: { [Op.in]: ['pending', 'sent'] } } }
+      );
+
+      const messages = await Message.findAll({
+        where: { id: { [Op.in]: receipts.map(r => r.messageId) } },
+        attributes: ['id', 'chatId', 'senderId']
+      });
+      for (const message of messages) {
+        this.io.to(`user_${message.senderId}`).emit('message_delivered', {
+          messageId: message.id,
+          chatId: message.chatId,
+          userId: socket.userId,
+          deliveredAt
         });
       }
+    } catch (error) {
+      console.error('Messages delivered error:', error);
     }
   }
 

@@ -5,6 +5,7 @@ const {
   createChat,
   getUserChats,
   getChatMessages,
+  syncMessages,
   searchUsers,
   inviteToGroup,
   respondToGroupInvite,
@@ -19,6 +20,8 @@ const {
 router.post('/create', authenticateToken, createChat);
 router.get('/my-chats', authenticateToken, getUserChats);
 router.get('/:chatId/messages', authenticateToken, getChatMessages);
+// Messages in all chats after the app's cursor (offline catch-up)
+router.get('/sync', authenticateToken, syncMessages);
 router.get('/search/users', authenticateToken, searchUsers);
 
 // ✅ NEW: Fetch full chat data for notifications
