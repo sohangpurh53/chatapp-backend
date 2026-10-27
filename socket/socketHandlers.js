@@ -592,7 +592,11 @@ class SocketHandlers {
               chatId: chatId,
               content: message.content,
               isEncrypted: message.isEncrypted,
-              messageType: message.messageType
+              messageType: message.messageType,
+              // The ciphertext itself, so the phone can decrypt the notification
+              // without fetching the message (it may have no session yet)
+              encryptedContent: messageToEmit.encryptedContent,
+              createdAt: message.createdAt
             });
           } catch (fcmError) {
             console.error(`❌ FCM notification failed for user ${participant.userId}:`, fcmError.message);

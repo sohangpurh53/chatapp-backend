@@ -9,7 +9,7 @@ require.cache[require.resolve('../services/notificationService')] = {
 };
 
 const { Chat, ChatParticipant, Message, MessageReceipt, UserMessageDeletion } = require('../models');
-const { syncMessages, getChatMessages } = require('../controllers/chatController');
+const { syncMessages, getChatMessages, clearChat } = require('../controllers/chatController');
 const redisService = require('../config/redis');
 const SocketHandlers = require('../socket/socketHandlers');
 
@@ -344,5 +344,33 @@ describe('GET /chat/:chatId/messages with a before cursor', () => {
     assert.equal(earlier.createdAt[Op.lt].toISOString(), '2026-10-01T10:00:02.000Z');
     assert.equal(sameMoment.id[Op.lt], ID_NEW);
     assert.deepEqual(res.body.messages.map(m => m.id), [ID_A, ID_B]);
+  });
+});
+
+describe('DELETE /chat/:chatId/clear with a before cutoff', () => {
+  test('clears only messages up to the cutoff (cleared offline, sent later)', async () => {
+    let query;
+    let created;
+    stub(Chat, 'findByPk', async () => ({ id: 'c1' }));
+    stub(Message, 'findAll', async (args) => { query = args; return [{ id: ID_A }]; });
+    stub(UserMessageDeletion, 'bulkCreate', async (rows) => { created = rows; });
+    const res = { status() { return this; }, json(body) { this.body = body; return this; } };
+
+    await clearChat({ user: { id: 'me' }, params: { chatId: 'c1' }, query: { before: '2026-10-01T10:00:05.000Z' } }, res);
+
+    const { Op } = require('sequelize');
+    assert.equal(query.where.chatId, 'c1');
+    assert.equal(query.where.createdAt[Op.lte].toISOString(), '2026-10-01T10:00:05.000Z');
+    assert.deepEqual(created.map(r => r.messageId), [ID_A]);
+    assert.equal(res.body.deletedCount, 1);
+  });
+
+  test('without a cutoff, the whole chat as before', async () => {
+    let query;
+    stub(Chat, 'findByPk', async () => ({ id: 'c1' }));
+    stub(Message, 'findAll', async (args) => { query = args; return []; });
+    const res = { status() { return this; }, json(body) { this.body = body; return this; } };
+    await clearChat({ user: { id: 'me' }, params: { chatId: 'c1' }, query: {} }, res);
+    assert.deepEqual(query.where, { chatId: 'c1' });
   });
 });

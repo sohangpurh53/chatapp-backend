@@ -100,3 +100,60 @@ icon). It stays in a queue on the phone until the server confirms it.
   is parsed once (with its CRT values) and calls run on a small thread pool instead
   of re-parsing the PEM on Android's serial AsyncTask thread. The output is
   identical (verified on device against the library: 0 mismatches in 40).
+
+## Clear chat offline
+
+`DELETE /chat/:chatId/clear?before=<createdAt>` clears only the messages up to that
+time. The app clears the chat on the phone at once and sends the server's time of
+the newest message it showed, so a clear sent later (after being offline) doesn't
+also hide messages that arrived since. The app queues the clear (`pendingActions`)
+until the server confirms it. Meanwhile it keeps the cleared messages out of
+anything it fetches or syncs. Without `before`, the whole chat is cleared, as before.
+
+## Message format v2 (authenticated, signed)
+
+New messages from this app (every message sent through the outbox) use
+`encryptedContent.version: 2`:
+
+- **Encrypt-then-MAC:** AES-256-CBC plus HMAC-SHA256, checked before anything is
+  decrypted. Direct chats use 64 random bytes per message (32 for encryption, 32 for
+  the MAC), RSA-wrapped for the recipient and the sender as in v1. Groups derive both
+  keys from the group key.
+- **What the MAC covers:** `chatapp-e2e-v2|chatId|messageId|senderId|keyVersion|iv|ciphertext`.
+  `mid` must equal the message's id, so a ciphertext replayed under another id, moved
+  to another chat, or credited to someone else is refused.
+- **`signature`:** SHA256withRSA by the sender's account key over the MAC input plus
+  the MAC, checked against the sender's public key (cached on the phone so it can
+  also be checked offline). This stops a group member, or the server, from making up
+  messages in someone else's name.
+- **Downgrade guard:** once a sender's first signed message has been seen, an
+  unsigned (v1) message from them dated after it is refused. Older messages stay
+  readable.
+- **Rollout:** old app versions can't read v2 messages. Install the new build on
+  every phone.
+
+## Attachments are end to end encrypted
+
+The file is encrypted on the phone before upload (`FileCryptoModule.kt`: a random
+key per file, AES-256-CBC plus HMAC-SHA256, streamed). The server stores only
+ciphertext. The upload sends `encrypted=1`, and the server then skips thumbnails:
+before this change it generated viewable thumbnails of every image. The file's key
+travels inside the message as its (v2, signed) encrypted text. Downloads are checked
+against the MAC before anything is decrypted. File name, MIME type and size are
+still visible to the server as metadata.
+
+## Notifications show the message text
+
+Encrypted message pushes were always data-only, so the app could draw them itself,
+but in a closed app they fell back to "New message". The background task had no
+sign-in token, and it only restored the 30-day session copy of the keys. Now:
+
+- the server puts the ciphertext in the push when it fits (`encryptedPayload`,
+  `createdAt`, at most 2800 characters; see `services/pushPayload.js`), so the phone
+  decrypts it with no network round trip;
+- the app restores the keys saved on the phone (`ensureReady`) and the stored sign-in
+  token for longer messages, which it has to fetch;
+- attachments show their label ("📷 Photo"), never their key.
+
+**Needs a backend redeploy and restart:** clear-chat `before`, `encrypted=1`
+uploads, and push payloads.

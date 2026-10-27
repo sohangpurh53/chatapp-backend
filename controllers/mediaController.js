@@ -24,9 +24,13 @@ const uploadFile = async (req, res) => {
     // Upload to MinIO
     const uploadResult = await mediaService.uploadFile(file, userId, fileType);
 
+    // End-to-end encrypted uploads are ciphertext: there is no picture to make a
+    // thumbnail of (and the server must not see one)
+    const encrypted = req.body?.encrypted === '1';
+
     // Generate thumbnail for images
     let thumbnailUrl = null;
-    if (fileType === 'image') {
+    if (fileType === 'image' && !encrypted) {
       thumbnailUrl = await mediaService.generateThumbnail(
         file,
         uploadResult.objectName
@@ -34,7 +38,7 @@ const uploadFile = async (req, res) => {
     }
 
     // Generate thumbnail for videos (if implemented)
-    if (fileType === 'video') {
+    if (fileType === 'video' && !encrypted) {
       thumbnailUrl = await mediaService.generateVideoThumbnail(
         file,
         uploadResult.objectName

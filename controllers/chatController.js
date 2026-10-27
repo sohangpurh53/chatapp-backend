@@ -1495,9 +1495,16 @@ const clearChat = async (req, res) => {
       return res.status(404).json({ error: 'Chat not found or access denied' });
     }
 
-    // Get all messages in this chat
+    // Get all messages in this chat. `?before=<createdAt>` limits it to messages up
+    // to that one: an app that cleared the chat while offline sends the time of the
+    // newest message it showed, so messages that arrived since are not cleared too.
+    const where = { chatId };
+    const before = req.query.before ? new Date(req.query.before) : null;
+    if (before && !Number.isNaN(before.getTime())) {
+      where.createdAt = { [Op.lte]: before };
+    }
     const messages = await Message.findAll({
-      where: { chatId },
+      where,
       attributes: ['id']
     });
 

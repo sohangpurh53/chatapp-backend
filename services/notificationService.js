@@ -1,6 +1,8 @@
 const { Notification, User, Chat, Message } = require('../models');
 const { notificationQueue } = require('../config/queue');
 
+const { encryptedPushPayload } = require('./pushPayload');
+
 class NotificationService {
   /**
    * Create and queue notification for incoming call
@@ -65,7 +67,7 @@ class NotificationService {
    */
   async notifyNewMessage(messageData) {
     try {
-      const { messageId, senderId, receiverId, chatId, content, isEncrypted, messageType, _completeChatData } = messageData;
+      const { messageId, senderId, receiverId, chatId, content, isEncrypted, messageType, encryptedContent, createdAt, _completeChatData } = messageData;
 
       // Get sender info
       const sender = await User.findByPk(senderId, {
@@ -141,8 +143,9 @@ class NotificationService {
       }
 
       // Prepare message preview for notification title/body
+      // Attachments keep their label, encrypted or not (an encrypted one's text is its key)
       let messagePreview = content;
-      if (isEncrypted) {
+      if (isEncrypted && (!messageType || messageType === 'text')) {
         messagePreview = '🔒 Encrypted message';
       } else if (messageType === 'image') {
         messagePreview = '📷 Photo';
@@ -176,6 +179,9 @@ class NotificationService {
           messagePreview,
           // Server cannot read E2E content: client decrypts and shows the notification itself
           isEncrypted: isEncrypted ? 'true' : 'false',
+          // The ciphertext, when it fits in a push (FCM data is capped at 4 KB): the
+          // phone decrypts it without a network round trip. Otherwise it fetches it.
+          ...encryptedPushPayload(isEncrypted, messageType, encryptedContent, createdAt),
           action: 'open_chat',
           
           // Essential chat information only
