@@ -22,7 +22,14 @@ class SocketHandlers {
     this.activeCalls = new Map(); // callId -> callData
     this.userCalls = new Map(); // userId -> callId
     this.callTimeouts = new Map(); // callId -> timeoutId
+    this.callLocks = new Map(); // callId -> promise of the last queued task (see runExclusive)
     this.callDisconnectTimers = new Map(); // userId -> timeoutId (see scheduleCallDisconnectCleanup)
+    // Overridable so tests can run the real timers in milliseconds
+    this.timings = {
+      ringTimeoutMs: RING_TIMEOUT_MS,
+      ringAckTimeoutMs: RING_ACK_TIMEOUT_MS,
+      reconnectGraceMs: { ...CALL_RECONNECT_GRACE_MS },
+    };
     this.lastWaveAt = new Map(); // `${from}:${to}` -> timestamp (rate limit)
   }
 
@@ -1260,7 +1267,7 @@ class SocketHandlers {
     // A ring nobody ended (server restarted mid-ring), or a call whose user is gone
     // with no reconnect pending (server restarted mid-call)
     const ringingTooLong = callData.status === 'ringing' &&
-      Date.now() - new Date(callData.startedAt).getTime() > RING_TIMEOUT_MS + 5000;
+      Date.now() - new Date(callData.startedAt).getTime() > this.timings.ringTimeoutMs + 5000;
     const abandoned = callData.status === 'answered' &&
       !this.isUserConnected(userId) && !this.callDisconnectTimers.has(userId);
     if (ringingTooLong || abandoned) {
@@ -1331,7 +1338,7 @@ class SocketHandlers {
       this.callTimeouts.set(callId, setTimeout(() => {
         this.callTimeouts.delete(callId);
         this.handleMissedCall(callId);
-      }, RING_TIMEOUT_MS));
+      }, this.timings.ringTimeoutMs));
 
       const receiverOnline = this.isUserConnected(receiverId);
       // 'incoming_call' is emitted synchronously at the start of ringReceiver, so it
@@ -1367,7 +1374,7 @@ class SocketHandlers {
       if (receiverOnline) {
         const responses = await new Promise((resolve) => {
           this.io.to(this.userRoom(receiverId))
-            .timeout(RING_ACK_TIMEOUT_MS)
+            .timeout(this.timings.ringAckTimeoutMs)
             .emit('incoming_call', { callId, caller, callType, chatId, receiverId }, (_err, res) => resolve(res || []));
         });
         acknowledged = responses.length > 0;
@@ -1384,7 +1391,7 @@ class SocketHandlers {
 
       console.log(`📱 No app acknowledged call ${callId}, waking ${receiverId} with a push`);
       const fcmService = require('../services/fcmService');
-      const ringExpiresAt = new Date(callData.startedAt).getTime() + RING_TIMEOUT_MS;
+      const ringExpiresAt = new Date(callData.startedAt).getTime() + this.timings.ringTimeoutMs;
       await fcmService.sendNotification(receiverId, {
         type: 'incoming_call_offline',
         ttlMs: Math.max(1000, ringExpiresAt - Date.now()),
@@ -1414,7 +1421,7 @@ class SocketHandlers {
       const fcmService = require('../services/fcmService');
       await fcmService.sendNotification(userId, {
         type: 'call_ended',
-        ttlMs: RING_TIMEOUT_MS,
+        ttlMs: this.timings.ringTimeoutMs,
         data: {
           type: 'call_ended',
           callId: String(callId),
@@ -1428,7 +1435,26 @@ class SocketHandlers {
     }
   }
 
-  async handleAnswerCall(socket, data) {
+  /** Runs `task` once any earlier task for the same call has finished. */
+  runExclusive(callId, task) {
+    const previous = this.callLocks.get(callId) || Promise.resolve();
+    const next = previous.then(task, task);
+    const tail = next.catch(() => {});
+    this.callLocks.set(callId, tail);
+    tail.then(() => {
+      if (this.callLocks.get(callId) === tail) this.callLocks.delete(callId);
+    });
+    return next;
+  }
+
+  // One answer at a time per call: the notification button and the call screen can both
+  // send answer_call, and two that read the call as "ringing" together would both go
+  // through (the caller would hear "answered" twice)
+  handleAnswerCall(socket, data) {
+    return this.runExclusive(data && data.callId, () => this.processAnswerCall(socket, data));
+  }
+
+  async processAnswerCall(socket, data) {
     try {
       const { callId, hasOffer } = data || {};
 
@@ -1556,7 +1582,14 @@ class SocketHandlers {
     }
   }
 
-  async handleCallSignal(socket, data) {
+  // In order, per call: an offer takes more Redis round trips than the candidates the
+  // caller sends right after it, so handled side by side the candidates were stored
+  // before the offer (and the offer then deleted them)
+  handleCallSignal(socket, data) {
+    return this.runExclusive(data && data.callId, () => this.processCallSignal(socket, data));
+  }
+
+  async processCallSignal(socket, data) {
     try {
       const { callId, signal, targetUserId } = data || {};
       if (!signal || !signal.type) {
@@ -1720,8 +1753,8 @@ class SocketHandlers {
       if (callData.status === 'ringing' && callData.receiverId === userId) return;
 
       const grace = callData.status === 'answered'
-        ? CALL_RECONNECT_GRACE_MS.answered
-        : CALL_RECONNECT_GRACE_MS.ringing;
+        ? this.timings.reconnectGraceMs.answered
+        : this.timings.reconnectGraceMs.ringing;
       console.log(`⏳ User ${userId} lost their socket during call ${callId}, ending it in ${grace / 1000}s unless they reconnect`);
 
       this.cancelCallDisconnectTimer(userId);
