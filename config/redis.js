@@ -183,6 +183,20 @@ class RedisService {
     }
   }
 
+  /** Unexpired signals stored for one call (no KEYS scan, unlike getPendingSignalsForUser). */
+  async getPendingSignals(userId, callId) {
+    try {
+      const items = await this.client.lrange(`pending_signals:${userId}:${callId}`, 0, -1);
+      const now = Date.now();
+      return items
+        .map(i => JSON.parse(i))
+        .filter(signal => !signal.expiresAt || signal.expiresAt >= now);
+    } catch (error) {
+      console.error('Redis getPendingSignals error:', error);
+      return [];
+    }
+  }
+
   async deletePendingSignals(userId, callId) {
     try {
       const key = `pending_signals:${userId}:${callId}`;

@@ -5,6 +5,15 @@ const { v4: uuidv4 } = require('uuid');
 const notificationService = require('../services/notificationService');
 const { isUuid } = require('../utils/ids');
 
+// How long a call rings before it counts as missed. A phone woken by a push needs
+// time to start the app and connect before the answer reaches us.
+const RING_TIMEOUT_MS = 45000;
+// How long a connected app has to acknowledge 'incoming_call' before the phone is
+// woken with a push as well
+const RING_ACK_TIMEOUT_MS = 2500;
+// How long a call outlives its user's last socket closing
+const CALL_RECONNECT_GRACE_MS = { answered: 60000, ringing: 15000 };
+
 class SocketHandlers {
   constructor(io) {
     this.io = io;
@@ -13,6 +22,7 @@ class SocketHandlers {
     this.activeCalls = new Map(); // callId -> callData
     this.userCalls = new Map(); // userId -> callId
     this.callTimeouts = new Map(); // callId -> timeoutId
+    this.callDisconnectTimers = new Map(); // userId -> timeoutId (see scheduleCallDisconnectCleanup)
     this.lastWaveAt = new Map(); // `${from}:${to}` -> timestamp (rate limit)
   }
 
@@ -21,6 +31,8 @@ class SocketHandlers {
 
     // Store user connection
     this.connectedUsers.set(socket.userId, socket.id);
+    // Back within the grace period: the call goes on
+    this.cancelCallDisconnectTimer(socket.userId);
 
     // Update user online status
     this.updateUserOnlineStatus(socket.userId, true);
@@ -98,21 +110,15 @@ class SocketHandlers {
 
     socket.on('disconnect', () => this.handleDisconnect(socket));
 
-    // Deliver any pending signals that were stored while user was offline
+    // Signals sent while this user's socket was down mid-call (an ICE restart after a
+    // network change). Signals for a call that is still ringing wait for answer_call:
+    // an app woken by a push isn't ready for them yet.
     try {
-      const pending = await redisService.getPendingSignalsForUser(socket.userId);
-      for (const callId of Object.keys(pending)) {
-        const signals = pending[callId];
-        for (const sig of signals) {
-          console.log(`📤 Delivering pending signal for call ${callId} to user ${socket.userId}`);
-          socket.emit('call_signal', {
-            callId,
-            signal: sig.payload,
-            fromUserId: sig.payload.fromUserId || null
-          });
-        }
-        // Remove delivered pending signals
-        await redisService.deletePendingSignals(socket.userId, callId);
+      const callId = this.userCalls.get(socket.userId) ||
+        (await redisService.getUserCallStatus(socket.userId))?.callId;
+      const callData = callId && await redisService.getActiveCall(callId);
+      if (callData?.status === 'answered') {
+        await this.flushPendingSignals(socket, callId);
       }
     } catch (err) {
       console.error('Error delivering pending signals on connect:', err);
@@ -1110,13 +1116,6 @@ class SocketHandlers {
   async handleDisconnect(socket) {
     console.log(`User ${socket.user.username} disconnected`);
 
-    try {
-      // ✅ COMPREHENSIVE CALL CLEANUP
-      await this.cleanupUserCallState(socket.userId, 'network_error');
-    } catch (error) {
-      console.error(`❌ Error cleaning up call state for user ${socket.userId}:`, error);
-    }
-
     // A reconnect can create the new socket before the old one's disconnect
     // arrives (and a user may have several devices). Only go offline when this
     // was the user's last live socket; otherwise point at the remaining one.
@@ -1126,6 +1125,7 @@ class SocketHandlers {
       console.log(`User ${socket.userId} still connected via socket ${remainingSocket.id}, staying online`);
     } else {
       this.connectedUsers.delete(socket.userId);
+      this.scheduleCallDisconnectCleanup(socket.userId);
       await this.updateUserOnlineStatus(socket.userId, false);
     }
 
@@ -1218,73 +1218,94 @@ class SocketHandlers {
     }
   }
 
-  // Call handling methods
+  // ============================================================================
+  // CALLS
+  // Every call event goes to the user's room (all their sockets, on any server
+  // instance) rather than to the single socket id in connectedUsers, which can
+  // point at a half-open socket after a reconnect.
+  // ============================================================================
+
+  userRoom(userId) {
+    return `user_${userId}`;
+  }
+
+  /** Whether the user has a socket on this server. */
+  isUserConnected(userId) {
+    return (this.io.sockets.adapter.rooms.get(this.userRoom(userId))?.size || 0) > 0;
+  }
+
+  clearCallTimeout(callId) {
+    if (this.callTimeouts.has(callId)) {
+      clearTimeout(this.callTimeouts.get(callId));
+      this.callTimeouts.delete(callId);
+    }
+  }
+
+  cancelCallDisconnectTimer(userId) {
+    if (this.callDisconnectTimers.has(userId)) {
+      clearTimeout(this.callDisconnectTimers.get(userId));
+      this.callDisconnectTimers.delete(userId);
+    }
+  }
+
+  /** The user's live call, after dropping call state that outlived its call. */
+  async getLiveCall(userId) {
+    const status = await redisService.getUserCallStatus(userId);
+    const callData = status && await redisService.getActiveCall(status.callId);
+    if (!callData) {
+      if (status) await redisService.deleteUserCallStatus(userId);
+      this.userCalls.delete(userId);
+      return null;
+    }
+    // A ring nobody ended (server restarted mid-ring), or a call whose user is gone
+    // with no reconnect pending (server restarted mid-call)
+    const ringingTooLong = callData.status === 'ringing' &&
+      Date.now() - new Date(callData.startedAt).getTime() > RING_TIMEOUT_MS + 5000;
+    const abandoned = callData.status === 'answered' &&
+      !this.isUserConnected(userId) && !this.callDisconnectTimers.has(userId);
+    if (ringingTooLong || abandoned) {
+      await this.endCall(callData.id, 'network_error');
+      return null;
+    }
+    return callData;
+  }
+
   async handleInitiateCall(socket, data) {
     try {
-      const { receiverId, callType = 'voice', chatId } = data;
-      const callId = uuidv4();
+      const { receiverId, callType = 'voice', chatId } = data || {};
+      if (!receiverId || receiverId === socket.userId) {
+        socket.emit('call_error', { message: 'Invalid receiver' });
+        return;
+      }
 
       console.log(`📞 Initiating call from ${socket.userId} to ${receiverId}`);
 
-      // Check if receiver exists
-      const receiver = await User.findByPk(receiverId);
-      if (!receiver) {
-        console.error(`❌ Receiver ${receiverId} not found`);
+      const [receiver, caller] = await Promise.all([
+        User.findByPk(receiverId, { attributes: ['id'] }),
+        User.findByPk(socket.userId, { attributes: ['id', 'username', 'avatar'] }),
+      ]);
+      if (!receiver || !caller) {
         socket.emit('call_error', { message: 'User not found' });
         return;
       }
 
-      // ✅ FIX: Clean up any stale call status before checking
-      const existingCall = await redisService.getUserCallStatus(socket.userId);
-      if (existingCall) {
-        console.warn(`⚠️  Caller ${socket.userId} has stale call status, cleaning up...`);
-        // Check if the call actually exists
-        const callData = await redisService.getActiveCall(existingCall);
-        if (!callData) {
-          // Stale data, clean it up
-          console.log(`🧹 Cleaning up stale call status for caller ${socket.userId}`);
-          await redisService.deleteUserCallStatus(socket.userId);
-          this.userCalls.delete(socket.userId);
-        } else {
-          console.error(`❌ Caller ${socket.userId} is already in active call ${existingCall}`);
-          socket.emit('call_error', { message: 'You are already in a call' });
-          return;
-        }
+      // The app only lets you call when it has no call of its own, so a call the
+      // server still has for the caller is dead: end it properly
+      const callerCall = await this.getLiveCall(socket.userId);
+      if (callerCall) {
+        const otherUserId = callerCall.callerId === socket.userId ? callerCall.receiverId : callerCall.callerId;
+        this.io.to(this.userRoom(otherUserId)).emit('call_ended', {
+          callId: callerCall.id, endedBy: socket.userId, reason: 'user_ended'
+        });
+        await this.endCall(callerCall.id, 'normal');
       }
 
-      // ✅ FIX: Clean up any stale call status for receiver before checking
-      const receiverCall = await redisService.getUserCallStatus(receiverId);
-      if (receiverCall) {
-        console.warn(`⚠️  Receiver ${receiverId} has stale call status, checking...`);
-        // Check if the call actually exists
-        const callData = await redisService.getActiveCall(receiverCall);
-        if (!callData) {
-          // Stale data, clean it up
-          console.log(`🧹 Cleaning up stale call status for receiver ${receiverId}`);
-          await redisService.deleteUserCallStatus(receiverId);
-          this.userCalls.delete(receiverId);
-        } else {
-          console.error(`❌ Receiver ${receiverId} is already in active call ${receiverCall}`);
-          socket.emit('call_error', { message: 'User is busy' });
-          return;
-        }
+      if (await this.getLiveCall(receiverId)) {
+        socket.emit('call_error', { message: 'User is busy' });
+        return;
       }
 
-      // Check if receiver is online (for Socket.IO delivery)
-      const receiverSocketId = this.connectedUsers.get(receiverId);
-      // const isReceiverOnline = !!receiverSocketId;
-
-      // Create call record
-      const call = await Call.create({
-        id: callId,
-        callerId: socket.userId,
-        receiverId,
-        chatId,
-        callType,
-        status: 'initiated'
-      });
-
-      // Store call in Redis
+      const callId = uuidv4();
       const callData = {
         id: callId,
         callerId: socket.userId,
@@ -1296,333 +1317,77 @@ class SocketHandlers {
         participants: [socket.userId, receiverId]
       };
 
-      await redisService.setActiveCall(callId, callData);
-      await redisService.setUserCallStatus(socket.userId, callId, 'calling');
-      await redisService.setUserCallStatus(receiverId, callId, 'receiving');
-
-      // Store call mapping
+      await Call.create({ id: callId, callerId: socket.userId, receiverId, chatId, callType, status: 'initiated' });
+      await Promise.all([
+        redisService.setActiveCall(callId, callData),
+        redisService.setUserCallStatus(socket.userId, callId, 'calling'),
+        redisService.setUserCallStatus(receiverId, callId, 'receiving'),
+      ]);
       this.activeCalls.set(callId, callData);
       this.userCalls.set(socket.userId, callId);
       this.userCalls.set(receiverId, callId);
-
-      // Get caller info
-      const caller = await User.findByPk(socket.userId, {
-        attributes: ['id', 'username', 'avatar']
-      });
-
-      // ✅ FIX: Verify caller exists
-      if (!caller) {
-        console.error(`❌ Caller ${socket.userId} not found in database`);
-        socket.emit('call_error', { message: 'Caller not found' });
-        // Clean up
-        await this.endCall(callId, 'error');
-        return;
-      }
-
-    // ✅ FIX: Send to receiver FIRST, then confirm to caller
-    // const receiverSocketId = this.connectedUsers.get(receiverId);
-    const isReceiverOnline = !!receiverSocketId;
-
-    // ✅ FIX: Define callerData outside the if block so it's available for both online and offline cases
-    const callerData = {
-      id: caller.id,
-      username: caller.username,
-      avatar: caller.avatar || null
-    };
-
-    if (isReceiverOnline && receiverSocketId) {
-      console.log(`📡 Receiver ${receiverId} is ONLINE, sending via Socket.IO`);
-      
-      // ✅ CRITICAL: Include receiverId for verification
-      this.io.to(receiverSocketId).emit('incoming_call', {
-        callId,
-        caller: callerData,
-        callType,
-        chatId,
-        receiverId // ✅ ADD THIS for frontend validation
-      });
-      
-      console.log(`✅ Socket event sent to receiver`);
-      
-      // ✅ Small delay to ensure receiver processes first
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-    } else {
-      console.log(`📱 Receiver ${receiverId} is OFFLINE - sending simplified FCM notification`);
-      // ✅ SIMPLIFIED: Send FCM immediately without waiting for signal data
-      await this.sendOfflineCallNotification(receiverId, callId, callerData, callType, chatId);
-    }
-
-    // ✅ NOW confirm to caller (after receiver was notified)
-    socket.emit('call_initiated', {
-      callId,
-      receiverId,
-      callType,
-      status: isReceiverOnline ? 'ringing' : 'calling',
-      receiverOnline: isReceiverOnline
-    });
-
-      // Store the call ID in the socket for easy access
       socket.currentCallId = callId;
 
-    // Set timeout for missed call
-    setTimeout(async () => {
-      const currentCall = await redisService.getActiveCall(callId);
-      if (currentCall && currentCall.status === 'ringing') {
-        await this.handleMissedCall(callId);
-      }
-    }, 30000);
+      this.callTimeouts.set(callId, setTimeout(() => {
+        this.callTimeouts.delete(callId);
+        this.handleMissedCall(callId);
+      }, RING_TIMEOUT_MS));
 
+      const receiverOnline = this.isUserConnected(receiverId);
+      // 'incoming_call' is emitted synchronously at the start of ringReceiver, so it
+      // reaches the receiver before the offer the caller sends after 'call_initiated'
+      this.ringReceiver(callData, {
+        id: caller.id,
+        username: caller.username,
+        avatar: caller.avatar || null
+      }, receiverOnline);
+
+      socket.emit('call_initiated', {
+        callId,
+        receiverId,
+        callType,
+        status: receiverOnline ? 'ringing' : 'calling',
+        receiverOnline
+      });
     } catch (error) {
       console.error('Initiate call error:', error);
       socket.emit('call_error', { message: 'Failed to initiate call' });
     }
   }
 
-  async handleAnswerCall(socket, data) {
-    try {
-      const { callId } = data;
-
-      const callData = await redisService.getActiveCall(callId);
-      if (!callData || callData.receiverId !== socket.userId) {
-        socket.emit('call_error', { message: 'Invalid call' });
-        return;
-      }
-
-      // Update call status
-      callData.status = 'answered';
-      callData.answeredAt = new Date();
-
-      await redisService.setActiveCall(callId, callData);
-      await Call.update(
-        {
-          status: 'answered',
-          startedAt: new Date()
-        },
-        { where: { id: callId } }
-      );
-
-      // Store the call ID in the socket for easy access
-      socket.currentCallId = callId;
-
-      // Notify caller that call was answered (without signal - WebRTC will handle separately)
-      const callerSocketId = this.connectedUsers.get(callData.callerId);
-      if (callerSocketId) {
-        this.io.to(callerSocketId).emit('call_answered', {
-          callId,
-          receiverId: socket.userId
-        });
-      }
-
-      socket.emit('call_connected', { callId });
-
-    } catch (error) {
-      console.error('Answer call error:', error);
-      socket.emit('call_error', { message: 'Failed to answer call' });
-    }
-  }
-
-  async handleDeclineCall(socket, data) {
-    try {
-      const { callId } = data;
-
-      const callData = await redisService.getActiveCall(callId);
-      if (!callData || callData.receiverId !== socket.userId) {
-        socket.emit('call_error', { message: 'Invalid call' });
-        return;
-      }
-
-      await this.endCall(callId, 'declined');
-
-      // Notify caller
-      const callerSocketId = this.connectedUsers.get(callData.callerId);
-      if (callerSocketId) {
-        this.io.to(callerSocketId).emit('call_declined', { callId });
-      }
-
-    } catch (error) {
-      console.error('Decline call error:', error);
-      socket.emit('call_error', { message: 'Failed to decline call' });
-    }
-  }
-
-  async handleEndCall(socket, data) {
-    try {
-      const { callId } = data;
-
-      const callData = await redisService.getActiveCall(callId);
-      if (!callData) {
-        console.warn(`Call ${callId} not found when trying to end`);
-        socket.emit('call_ended', { callId, endedBy: socket.userId, reason: 'not_found' });
-        return;
-      }
-
-      // Check if user is part of the call
-      if (callData.callerId !== socket.userId && callData.receiverId !== socket.userId) {
-        socket.emit('call_error', { message: 'Not authorized to end this call' });
-        return;
-      }
-
-      console.log(`🔚 User ${socket.userId} ending call ${callId}`);
-      console.log(`📊 Call participants: ${callData.callerId} -> ${callData.receiverId}`);
-
-      // ✅ CRITICAL: Notify other participant BEFORE ending call
-      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
-      const otherSocketId = this.connectedUsers.get(otherUserId);
-
-      console.log(`🔍 Other user: ${otherUserId}, Socket ID: ${otherSocketId ? 'ONLINE' : 'OFFLINE'}`);
-
-      // Always try to notify the other user first
-      if (otherSocketId) {
-        console.log(`📡 Notifying other user ${otherUserId} about call end via Socket.IO`);
-        this.io.to(otherSocketId).emit('call_ended', {
-          callId,
-          endedBy: socket.userId,
-          reason: 'user_ended'
-        });
-        console.log(`✅ Socket.IO call_ended event sent to ${otherUserId}`);
-      } else {
-        console.log(`📱 Other user ${otherUserId} offline, sending FCM call end notification`);
-        // ✅ NEW: Send FCM notification for call end to offline users
-        try {
-          const fcmService = require('../services/fcmService');
-          const fcmResult = await fcmService.sendNotification(otherUserId, {
-            title: 'Call ended',
-            body: 'The call has ended',
-            type: 'call_ended',
-            data: {
-              type: 'call_ended',
-              callId: String(callId),
-              endedBy: String(socket.userId),
-              reason: 'user_ended',
-              action: 'call_ended'
-            }
-          });
-          
-          if (fcmResult.success) {
-            console.log(`✅ FCM call end notification sent to user ${otherUserId}`);
-            console.log(`📬 FCM Message ID: ${fcmResult.messageId}`);
-          } else {
-            console.log(`⚠️  FCM call end notification failed: ${fcmResult.reason}`);
-          }
-        } catch (fcmError) {
-          console.error(`❌ Failed to send FCM call end notification:`, fcmError);
-        }
-      }
-
-      // Now end the call
-      await this.endCall(callId, 'normal');
-
-      // Confirm to the user who ended the call
-      socket.emit('call_ended', {
-        callId,
-        endedBy: socket.userId,
-        reason: 'user_ended'
-      });
-
-      console.log(`✅ Call ${callId} ended successfully`);
-
-      // Clean up pending signals related to this call
-      try {
-        await redisService.deletePendingSignals(callData.callerId, callId);
-        await redisService.deletePendingSignals(callData.receiverId, callId);
-      } catch (err) {
-        console.warn('Error deleting pending signals on call end:', err);
-      }
-
-    } catch (error) {
-      console.error('End call error:', error);
-      socket.emit('call_error', { message: 'Failed to end call' });
-    }
-  }
-
-  async handleCallSignal(socket, data) {
-    try {
-      const { callId, signal, targetUserId } = data;
-
-      console.log(`📡 Handling call signal: ${signal.type} for call ${callId} to user ${targetUserId}`);
-
-      const callData = await redisService.getActiveCall(callId);
-      if (!callData) {
-        console.warn(`⚠️  No active call found for callId ${callId}`);
-        return;
-      }
-
-      // ✅ ENHANCED: Validate signal data
-      if (!signal || !signal.type) {
-        console.error(`❌ Invalid signal data for call ${callId}`);
-        socket.emit('call_error', { message: 'Invalid signal data' });
-        return;
-      }
-
-      // Check if target user is online
-      const targetSocketId = this.connectedUsers.get(targetUserId);
-      const isTargetOnline = !!targetSocketId;
-
-      if (isTargetOnline) {
-        // ✅ Target is online - direct delivery
-        console.log(`📤 Target ${targetUserId} is ONLINE - direct signal delivery`);
-        this.io.to(targetSocketId).emit('call_signal', {
-          callId,
-          signal,
-          fromUserId: socket.userId
-        });
-        
-        // ✅ Confirm delivery to sender
-        socket.emit('signal_delivered', {
-          callId,
-          targetUserId,
-          signalType: signal.type,
-          deliveryMethod: 'socket'
-        });
-      } else {
-        // ✅ Target is offline - enhanced persistence and FCM delivery
-        console.log(`📥 Target ${targetUserId} is OFFLINE - persisting signal`);
-        
-        // Store signal with enhanced metadata
-        const signalData = {
-          type: signal.type,
-          payload: signal,
-          fromUserId: socket.userId,
-          timestamp: Date.now(),
-          callId: callId
-        };
-
-        await redisService.pushPendingSignal(targetUserId, callId, signalData);
-        console.log(`💾 Signal ${signal.type} stored in Redis for offline user ${targetUserId}`);
-
-        // ✅ CRITICAL: Only send FCM for OFFER signals (not ICE candidates)
-        if (signal.type === 'offer') {
-          console.log(`📱 Sending FCM notification for offer signal`);
-          await this.sendSignalViaFCM(targetUserId, callId, signal, callData, socket.userId);
-        } else {
-          console.log(`📝 Signal ${signal.type} stored but no FCM sent (not an offer)`);
-        }
-        
-        // ✅ Confirm storage to sender
-        socket.emit('signal_stored', {
-          callId,
-          targetUserId,
-          signalType: signal.type,
-          deliveryMethod: signal.type === 'offer' ? 'fcm_pending' : 'redis_only'
-        });
-      }
-
-    } catch (error) {
-      console.error('❌ Call signal error:', error);
-      socket.emit('call_error', { message: 'Signal delivery failed' });
-    }
-  }
-
   /**
-   * ✅ SIMPLIFIED: Send offline call notification without signal data
+   * Rings every device of the receiver. A connected app acknowledges 'incoming_call';
+   * when none does (no socket, or one left half-open by Doze or a network switch)
+   * the phone is woken with a high-priority push instead.
    */
-  async sendOfflineCallNotification(receiverId, callId, caller, callType, chatId) {
+  async ringReceiver(callData, caller, receiverOnline) {
+    const { id: callId, receiverId, callerId, callType, chatId } = callData;
     try {
+      let acknowledged = false;
+      if (receiverOnline) {
+        const responses = await new Promise((resolve) => {
+          this.io.to(this.userRoom(receiverId))
+            .timeout(RING_ACK_TIMEOUT_MS)
+            .emit('incoming_call', { callId, caller, callType, chatId, receiverId }, (_err, res) => resolve(res || []));
+        });
+        acknowledged = responses.length > 0;
+      }
+
+      // The caller may have hung up while we waited
+      const current = await redisService.getActiveCall(callId);
+      if (!current || current.status !== 'ringing') return;
+
+      if (acknowledged) {
+        this.io.to(this.userRoom(callerId)).emit('call_status_update', { callId, status: 'ringing' });
+        return;
+      }
+
+      console.log(`📱 No app acknowledged call ${callId}, waking ${receiverId} with a push`);
       const fcmService = require('../services/fcmService');
-      
-      // Simple FCM payload - no signal data needed
-      const fcmPayload = {
+      const ringExpiresAt = new Date(callData.startedAt).getTime() + RING_TIMEOUT_MS;
+      await fcmService.sendNotification(receiverId, {
+        type: 'incoming_call_offline',
+        ttlMs: Math.max(1000, ringExpiresAt - Date.now()),
         data: {
           type: 'incoming_call_offline',
           callId: String(callId),
@@ -1633,106 +1398,224 @@ class SocketHandlers {
           callerName: String(caller.username),
           callerAvatar: String(caller.avatar || ''),
           timestamp: String(Date.now()),
+          ringExpiresAt: String(ringExpiresAt),
           notificationTitle: `Incoming ${callType} call`,
           notificationBody: `${caller.username} is calling you`
         }
-      };
-
-      await fcmService.sendNotification(receiverId, fcmPayload);
-      console.log(`✅ Simplified offline call notification sent to user ${receiverId}`);
-
-    } catch (error) {
-      console.error(`❌ Error sending offline call notification to user ${receiverId}:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * ✅ NEW: Enhanced FCM delivery with signal data
-   */
-  async sendSignalViaFCM(targetUserId, callId, signal, callData, fromUserId) {
-    try {
-      // ✅ Rate limiting: Check if we already sent FCM for this call
-      const fcmKey = `fcm_sent:${targetUserId}:${callId}`;
-      const alreadySent = await redisService.client.get(fcmKey);
-      
-      if (alreadySent) {
-        console.log(`⚠️  FCM already sent for call ${callId} to user ${targetUserId}, skipping`);
-        return;
-      }
-
-      const fcmService = require('../services/fcmService');
-      
-      // Get caller information
-      const caller = await User.findByPk(fromUserId, {
-        attributes: ['id', 'username', 'avatar']
       });
-
-      if (!caller) {
-        console.error(`❌ Caller ${fromUserId} not found for FCM delivery`);
-        return;
-      }
-
-      // ✅ Prepare DATA-ONLY FCM payload (no default notification)
-      // This prevents Firebase from showing default notification
-      // Our custom notifee notification will be shown instead
-      const fcmPayload = {
-        // ✅ FIXED: Move type and priority to data object as strings
-        data: {
-          type: 'incoming_call_with_signal',
-          priority: 'high',
-          callId: String(callId),
-          callerId: String(fromUserId),
-          receiverId: String(targetUserId),
-          callType: String(callData.callType),
-          chatId: callData.chatId ? String(callData.chatId) : '',
-          callerName: String(caller.username),
-          callerAvatar: String(caller.avatar || ''),
-          // ✅ CRITICAL: Include signal data in FCM payload
-          signalType: String(signal.type),
-          signalData: JSON.stringify(signal),
-          timestamp: String(Date.now()),
-          action: 'incoming_call_with_signal',
-          // ✅ Include title/body in data for our custom notification
-          notificationTitle: `Incoming ${callData.callType} call`,
-          notificationBody: `${caller.username} is calling you`
-        }
-      };
-
-      await fcmService.sendNotification(targetUserId, fcmPayload);
-      
-      // ✅ Mark FCM as sent for this call (5 minute TTL)
-      await redisService.client.setex(fcmKey, 300, 'sent');
-      
-      console.log(`✅ FCM with ${signal.type} signal sent to offline user ${targetUserId}`);
-
     } catch (error) {
-      console.error(`❌ Error sending FCM with signal to user ${targetUserId}:`, error);
-      throw error;
+      console.error(`❌ Error ringing user ${receiverId} for call ${callId}:`, error);
     }
   }
 
-  async handleToggleAudio(socket, data) {
+  /** Stops the ringing notification on a phone that has no socket (woken by a push). */
+  async pushCallEnded(userId, callId, endedBy, reason) {
     try {
-      const { callId, muted } = data;
+      const fcmService = require('../services/fcmService');
+      await fcmService.sendNotification(userId, {
+        type: 'call_ended',
+        ttlMs: RING_TIMEOUT_MS,
+        data: {
+          type: 'call_ended',
+          callId: String(callId),
+          endedBy: String(endedBy),
+          reason: String(reason),
+          action: 'call_ended'
+        }
+      });
+    } catch (error) {
+      console.error(`❌ Failed to push call end to user ${userId}:`, error);
+    }
+  }
+
+  async handleAnswerCall(socket, data) {
+    try {
+      const { callId, hasOffer } = data || {};
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData || callData.receiverId !== socket.userId) {
+        socket.emit('call_error', { callId, message: 'This call has already ended' });
+        return;
+      }
+
+      socket.currentCallId = callId;
+
+      // Answered twice (notification button, then the call screen): confirm again
+      if (callData.status === 'answered') {
+        socket.emit('call_connected', { callId });
+        return;
+      }
+
+      this.clearCallTimeout(callId);
+      callData.status = 'answered';
+      callData.answeredAt = new Date();
+      await redisService.setActiveCall(callId, callData);
+
+      this.io.to(this.userRoom(callData.callerId)).emit('call_answered', {
+        callId,
+        receiverId: socket.userId
+      });
+      // The receiver's other devices stop ringing
+      socket.to(this.userRoom(socket.userId)).emit('call_ended', {
+        callId, endedBy: socket.userId, reason: 'answered_elsewhere'
+      });
+      socket.emit('call_connected', { callId });
+
+      // A phone woken by a push had no app running when the caller's offer came:
+      // hand the stored offer over now, or have the caller send a fresh one
+      if (hasOffer) {
+        await redisService.deletePendingSignals(socket.userId, callId);
+      } else {
+        const delivered = await this.flushPendingSignals(socket, callId);
+        if (!delivered.offer) {
+          this.io.to(this.userRoom(callData.callerId)).emit('call_signal', {
+            callId,
+            signal: { type: 'request-offer' },
+            fromUserId: socket.userId
+          });
+        }
+      }
+
+      Call.update(
+        { status: 'answered', startedAt: new Date() },
+        { where: { id: callId } }
+      ).catch(error => console.error('Answer call DB update error:', error));
+    } catch (error) {
+      console.error('Answer call error:', error);
+      socket.emit('call_error', { callId: data?.callId, message: 'Failed to answer call' });
+    }
+  }
+
+  /** Sends the signals stored for this user's call while they had no socket. */
+  async flushPendingSignals(socket, callId) {
+    const signals = await redisService.getPendingSignals(socket.userId, callId);
+    await redisService.deletePendingSignals(socket.userId, callId);
+    for (const sig of signals) {
+      socket.emit('call_signal', { callId, signal: sig.payload, fromUserId: sig.fromUserId || null });
+    }
+    return { offer: signals.some(sig => sig.type === 'offer') };
+  }
+
+  async handleDeclineCall(socket, data) {
+    try {
+      const { callId } = data || {};
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData || callData.receiverId !== socket.userId) {
+        return;
+      }
+
+      await this.endCall(callId, 'declined');
+
+      this.io.to(this.userRoom(callData.callerId)).emit('call_declined', { callId });
+      // The receiver's other devices stop ringing
+      socket.to(this.userRoom(socket.userId)).emit('call_ended', {
+        callId, endedBy: socket.userId, reason: 'declined'
+      });
+      await redisService.deletePendingSignals(socket.userId, callId);
+    } catch (error) {
+      console.error('Decline call error:', error);
+    }
+  }
+
+  async handleEndCall(socket, data) {
+    try {
+      const { callId } = data || {};
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData) {
+        socket.emit('call_ended', { callId, endedBy: socket.userId, reason: 'not_found' });
+        return;
+      }
+
+      if (callData.callerId !== socket.userId && callData.receiverId !== socket.userId) {
+        return;
+      }
+
+      console.log(`🔚 User ${socket.userId} ending call ${callId}`);
+
+      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
+      const ended = { callId, endedBy: socket.userId, reason: 'user_ended' };
+
+      this.io.to(this.userRoom(otherUserId)).emit('call_ended', ended);
+      // The user's other devices (one may still be ringing) stop too
+      socket.to(this.userRoom(socket.userId)).emit('call_ended', ended);
+      if (!this.isUserConnected(otherUserId)) {
+        await this.pushCallEnded(otherUserId, callId, socket.userId, 'user_ended');
+      }
+
+      await this.endCall(callId, 'normal');
+      socket.emit('call_ended', ended);
+
+      await Promise.all([
+        redisService.deletePendingSignals(callData.callerId, callId),
+        redisService.deletePendingSignals(callData.receiverId, callId),
+      ]);
+    } catch (error) {
+      console.error('End call error:', error);
+    }
+  }
+
+  async handleCallSignal(socket, data) {
+    try {
+      const { callId, signal, targetUserId } = data || {};
+      if (!signal || !signal.type) {
+        return;
+      }
 
       const callData = await redisService.getActiveCall(callId);
       if (!callData) {
         return;
       }
-
-      // Notify other participant
-      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
-      const otherSocketId = this.connectedUsers.get(otherUserId);
-
-      if (otherSocketId) {
-        this.io.to(otherSocketId).emit('participant_audio_toggle', {
-          callId,
-          userId: socket.userId,
-          muted
-        });
+      const participants = [callData.callerId, callData.receiverId];
+      if (!participants.includes(socket.userId) || !participants.includes(targetUserId) ||
+          targetUserId === socket.userId) {
+        return;
       }
 
+      const relay = { callId, signal, fromUserId: socket.userId };
+      if (this.isUserConnected(targetUserId)) {
+        this.io.to(this.userRoom(targetUserId)).emit('call_signal', relay);
+        return;
+      }
+
+      // No socket: a phone still waking up from the push, or an app reconnecting after
+      // a network change. Kept until it answers, or reconnects mid-call. A new offer
+      // replaces everything stored before it (an ICE restart makes old candidates useless).
+      if (signal.type === 'offer') {
+        await redisService.deletePendingSignals(targetUserId, callId);
+      }
+      await redisService.pushPendingSignal(targetUserId, callId, {
+        type: signal.type,
+        payload: signal,
+        fromUserId: socket.userId,
+        timestamp: Date.now(),
+        callId
+      });
+    } catch (error) {
+      console.error('❌ Call signal error:', error);
+    }
+  }
+
+  /** Relays a call event to the other participant. */
+  async relayToOtherParticipant(socket, callId, event, payload) {
+    const callData = await redisService.getActiveCall(callId);
+    if (!callData) {
+      return null;
+    }
+    const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
+    this.io.to(this.userRoom(otherUserId)).emit(event, payload);
+    return callData;
+  }
+
+  async handleToggleAudio(socket, data) {
+    try {
+      const { callId, muted } = data;
+      await this.relayToOtherParticipant(socket, callId, 'participant_audio_toggle', {
+        callId,
+        userId: socket.userId,
+        muted
+      });
     } catch (error) {
       console.error('Toggle audio error:', error);
     }
@@ -1741,24 +1624,11 @@ class SocketHandlers {
   async handleToggleVideo(socket, data) {
     try {
       const { callId, videoEnabled } = data;
-
-      const callData = await redisService.getActiveCall(callId);
-      if (!callData) {
-        return;
-      }
-
-      // Notify other participant
-      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
-      const otherSocketId = this.connectedUsers.get(otherUserId);
-
-      if (otherSocketId) {
-        this.io.to(otherSocketId).emit('participant_video_toggle', {
-          callId,
-          userId: socket.userId,
-          videoEnabled
-        });
-      }
-
+      await this.relayToOtherParticipant(socket, callId, 'participant_video_toggle', {
+        callId,
+        userId: socket.userId,
+        videoEnabled
+      });
     } catch (error) {
       console.error('Toggle video error:', error);
     }
@@ -1767,31 +1637,14 @@ class SocketHandlers {
   async handleShareScreen(socket, data) {
     try {
       const { callId } = data;
-
-      const callData = await redisService.getActiveCall(callId);
-      if (!callData) {
-        return;
+      const callData = await this.relayToOtherParticipant(socket, callId, 'screen_share_started', {
+        callId,
+        userId: socket.userId
+      });
+      if (callData) {
+        callData.screenSharing = { userId: socket.userId, startedAt: new Date() };
+        await redisService.setActiveCall(callId, callData);
       }
-
-      // Update call data
-      callData.screenSharing = {
-        userId: socket.userId,
-        startedAt: new Date()
-      };
-
-      await redisService.setActiveCall(callId, callData);
-
-      // Notify other participant
-      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
-      const otherSocketId = this.connectedUsers.get(otherUserId);
-
-      if (otherSocketId) {
-        this.io.to(otherSocketId).emit('screen_share_started', {
-          callId,
-          userId: socket.userId
-        });
-      }
-
     } catch (error) {
       console.error('Share screen error:', error);
     }
@@ -1800,27 +1653,14 @@ class SocketHandlers {
   async handleStopScreenShare(socket, data) {
     try {
       const { callId } = data;
-
-      const callData = await redisService.getActiveCall(callId);
-      if (!callData) {
-        return;
+      const callData = await this.relayToOtherParticipant(socket, callId, 'screen_share_stopped', {
+        callId,
+        userId: socket.userId
+      });
+      if (callData) {
+        delete callData.screenSharing;
+        await redisService.setActiveCall(callId, callData);
       }
-
-      // Update call data
-      delete callData.screenSharing;
-      await redisService.setActiveCall(callId, callData);
-
-      // Notify other participant
-      const otherUserId = callData.callerId === socket.userId ? callData.receiverId : callData.callerId;
-      const otherSocketId = this.connectedUsers.get(otherUserId);
-
-      if (otherSocketId) {
-        this.io.to(otherSocketId).emit('screen_share_stopped', {
-          callId,
-          userId: socket.userId
-        });
-      }
-
     } catch (error) {
       console.error('Stop screen share error:', error);
     }
@@ -1829,144 +1669,114 @@ class SocketHandlers {
   async handleMissedCall(callId) {
     try {
       const callData = await redisService.getActiveCall(callId);
-      if (!callData) {
+      if (!callData || callData.status !== 'ringing') {
         return;
       }
 
       await this.endCall(callId, 'missed');
 
-      // Notify caller about missed call
-      const callerSocketId = this.connectedUsers.get(callData.callerId);
-      if (callerSocketId) {
-        this.io.to(callerSocketId).emit('call_missed', { callId });
+      this.io.to(this.userRoom(callData.callerId)).emit('call_missed', { callId });
+      this.io.to(this.userRoom(callData.receiverId)).emit('call_ended', {
+        callId, endedBy: callData.callerId, reason: 'missed'
+      });
+      if (!this.isUserConnected(callData.receiverId)) {
+        await this.pushCallEnded(callData.receiverId, callId, callData.callerId, 'missed');
       }
 
-      // Send push notification for missed call
       await notificationService.notifyMissedCall({
         callId,
         callerId: callData.callerId,
         receiverId: callData.receiverId,
         callType: callData.callType
       });
-
     } catch (error) {
       console.error('Handle missed call error:', error);
     }
   }
 
-  // async endCall(callId, reason = 'normal') {
-  //   try {
-  //     const callData = await redisService.getActiveCall(callId);
-  //     if (!callData) {
-  //       return;
-  //     }
-
-  //     const duration = callData.answeredAt
-  //       ? Math.floor((new Date() - new Date(callData.answeredAt)) / 1000)
-  //       : 0;
-
-  //     // Update database
-  //     await Call.update(
-  //       {
-  //         status: reason === 'missed' ? 'missed' : 'ended',
-  //         endedAt: new Date(),
-  //         duration,
-  //         endReason: reason
-  //       },
-  //       { where: { id: callId } }
-  //     );
-
-  //     // Clean up Redis
-  //     await redisService.deleteActiveCall(callId);
-  //     await redisService.deleteUserCallStatus(callData.callerId);
-  //     await redisService.deleteUserCallStatus(callData.receiverId);
-
-  //     // Clean up memory
-  //     this.activeCalls.delete(callId);
-  //     this.userCalls.delete(callData.callerId);
-  //     this.userCalls.delete(callData.receiverId);
-
-  //   } catch (error) {
-  //     console.error('End call cleanup error:', error);
-  //   }
-  // }
   /**
-   * ✅ NEW: Comprehensive user call state cleanup
+   * The user's last socket closed. Media flows peer-to-peer and the app reconnects
+   * by itself after a network change or a Doze pause, so the call is only ended if
+   * the user is still gone after a grace period.
    */
+  async scheduleCallDisconnectCleanup(userId) {
+    try {
+      const callId = this.userCalls.get(userId) || (await redisService.getUserCallStatus(userId))?.callId;
+      if (!callId) return;
+
+      const callData = await redisService.getActiveCall(callId);
+      if (!callData) {
+        await this.forceCleanupUserState(userId);
+        return;
+      }
+      // A ringing receiver is reached by push; the ring timeout ends the call if nobody answers
+      if (callData.status === 'ringing' && callData.receiverId === userId) return;
+
+      const grace = callData.status === 'answered'
+        ? CALL_RECONNECT_GRACE_MS.answered
+        : CALL_RECONNECT_GRACE_MS.ringing;
+      console.log(`⏳ User ${userId} lost their socket during call ${callId}, ending it in ${grace / 1000}s unless they reconnect`);
+
+      this.cancelCallDisconnectTimer(userId);
+      this.callDisconnectTimers.set(userId, setTimeout(() => {
+        this.callDisconnectTimers.delete(userId);
+        if (this.findLiveSocket(userId)) return;
+        this.cleanupUserCallState(userId, 'network_error');
+      }, grace));
+    } catch (error) {
+      console.error(`❌ Error scheduling call cleanup for user ${userId}:`, error);
+    }
+  }
+
   async cleanupUserCallState(userId, reason = 'normal') {
     try {
-      console.log(`🧹 Starting comprehensive cleanup for user ${userId}`);
+      const callIdToClean = this.userCalls.get(userId) ||
+        (await redisService.getUserCallStatus(userId))?.callId;
 
-      // 1. Check memory maps first
-      const userCallId = this.userCalls.get(userId);
-      
-      // 2. Check Redis for any call status
-      const redisCallId = await redisService.getUserCallStatus(userId);
-      
-      // 3. Use whichever call ID we found
-      const callIdToClean = userCallId || redisCallId;
-      
       if (callIdToClean) {
-        console.log(`🧹 Found active call ${callIdToClean} for user ${userId}`);
-        
-        // Get call data before cleanup
-        const callData = await redisService.getActiveCall(callIdToClean) || 
+        console.log(`🧹 Ending call ${callIdToClean} of user ${userId} (${reason})`);
+
+        const callData = await redisService.getActiveCall(callIdToClean) ||
                          this.activeCalls.get(callIdToClean);
-        
-        // End the call properly
+
         await this.endCall(callIdToClean, reason);
 
-        // Notify other participant if they exist and are online
         if (callData) {
           const otherUserId = callData.callerId === userId ? callData.receiverId : callData.callerId;
-          const otherSocketId = this.connectedUsers.get(otherUserId);
-
-          if (otherSocketId) {
-            console.log(`📡 Notifying other user ${otherUserId} about call end`);
-            this.io.to(otherSocketId).emit('call_ended', {
-              callId: callIdToClean,
-              endedBy: userId,
-              reason: reason
-            });
+          this.io.to(this.userRoom(otherUserId)).emit('call_ended', {
+            callId: callIdToClean,
+            endedBy: userId,
+            reason
+          });
+          if (!this.isUserConnected(otherUserId)) {
+            await this.pushCallEnded(otherUserId, callIdToClean, userId, reason);
           }
         }
       }
-      
-      // 4. Force cleanup any remaining state
+
       await this.forceCleanupUserState(userId);
-      
-      console.log(`✅ Comprehensive cleanup completed for user ${userId}`);
-      
     } catch (error) {
-      console.error(`❌ Error in comprehensive cleanup for user ${userId}:`, error);
-      // Still try force cleanup
+      console.error(`❌ Error in call cleanup for user ${userId}:`, error);
       await this.forceCleanupUserState(userId);
     }
   }
 
   /**
-   * ✅ NEW: Force cleanup user state (emergency cleanup)
+   * Force cleanup user state (emergency cleanup)
    */
   async forceCleanupUserState(userId) {
     try {
-      console.log(`🚨 Force cleanup for user ${userId}`);
-      
       // Clear from memory maps
       const callId = this.userCalls.get(userId);
       if (callId) {
         this.activeCalls.delete(callId);
         this.userCalls.delete(userId);
-        
-        // Clear timeout if exists
-        if (this.callTimeouts.has(callId)) {
-          clearTimeout(this.callTimeouts.get(callId));
-          this.callTimeouts.delete(callId);
-        }
+        this.clearCallTimeout(callId);
       }
-      
+
       // Clear from Redis
       await redisService.deleteUserCallStatus(userId);
-      
+
       // Find and clear any calls where this user is a participant
       for (const [cId, cData] of this.activeCalls.entries()) {
         if (cData.callerId === userId || cData.receiverId === userId) {
@@ -1974,16 +1784,9 @@ class SocketHandlers {
           this.userCalls.delete(cData.callerId);
           this.userCalls.delete(cData.receiverId);
           await redisService.deleteActiveCall(cId);
-          
-          if (this.callTimeouts.has(cId)) {
-            clearTimeout(this.callTimeouts.get(cId));
-            this.callTimeouts.delete(cId);
-          }
+          this.clearCallTimeout(cId);
         }
       }
-      
-      console.log(`✅ Force cleanup completed for user ${userId}`);
-      
     } catch (error) {
       console.error(`❌ Force cleanup failed for user ${userId}:`, error);
     }
@@ -1991,12 +1794,7 @@ class SocketHandlers {
 
   async endCall(callId, reason = 'normal') {
     try {
-      // ✅ Clear call timeout if it exists
-      if (this.callTimeouts.has(callId)) {
-        clearTimeout(this.callTimeouts.get(callId));
-        this.callTimeouts.delete(callId);
-        console.log(`🧹 Cleared timeout for call ${callId}`);
-      }
+      this.clearCallTimeout(callId);
 
       const callData = await redisService.getActiveCall(callId);
       if (!callData) {
@@ -2036,7 +1834,15 @@ class SocketHandlers {
       const endReason = endReasonMap[reason] || 'normal';
       const status = statusMap[reason] || 'ended';
 
-      // Update database
+      // Clean up Redis and memory first: a failed database update must not leave
+      // both users "busy"
+      await redisService.deleteActiveCall(callId);
+      await redisService.deleteUserCallStatus(callData.callerId);
+      await redisService.deleteUserCallStatus(callData.receiverId);
+      this.activeCalls.delete(callId);
+      this.userCalls.delete(callData.callerId);
+      this.userCalls.delete(callData.receiverId);
+
       await Call.update(
         {
           status: status,
@@ -2046,33 +1852,9 @@ class SocketHandlers {
         },
         { where: { id: callId } }
       );
-
-      // ✅ FIX: ALWAYS clean up Redis, even if database update fails
-      await redisService.deleteActiveCall(callId);
-      await redisService.deleteUserCallStatus(callData.callerId);
-      await redisService.deleteUserCallStatus(callData.receiverId);
-
-      // ✅ FIX: ALWAYS clean up memory maps
-      this.activeCalls.delete(callId);
-      this.userCalls.delete(callData.callerId);
-      this.userCalls.delete(callData.receiverId);
-
     } catch (error) {
       console.error('End call cleanup error:', error);
-      // ✅ FIX: Even on error, try to clean up memory to prevent "user busy" errors
-      try {
-        if (callId) {
-          this.activeCalls.delete(callId);
-          // Try to get user IDs from memory if Redis failed
-          const callFromMemory = this.activeCalls.get(callId);
-          if (callFromMemory) {
-            this.userCalls.delete(callFromMemory.callerId);
-            this.userCalls.delete(callFromMemory.receiverId);
-          }
-        }
-      } catch (cleanupError) {
-        console.error('Emergency cleanup also failed:', cleanupError);
-      }
+      this.activeCalls.delete(callId);
     }
   }
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const callController = require('../controllers/callController');
+const { Call } = require('../models');
 const { authenticateToken } = require('../middleware/auth');
 
 // Apply authentication middleware to all routes
@@ -18,47 +19,70 @@ router.get('/stats', callController.getCallStats);
 // Delete call from history
 router.delete('/:callId', callController.deleteCall);
 
-// ✅ NEW: Clear stuck call status (for debugging)
+// Status of one call, for an app woken by a push to check that it is still ringing
+router.get('/:callId/status', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { callId } = req.params;
+    const redisService = require('../config/redis');
+
+    const live = await redisService.getActiveCall(callId);
+    if (live) {
+      if (live.callerId !== userId && live.receiverId !== userId) {
+        return res.status(404).json({ error: 'Call not found' });
+      }
+      return res.json({ callId, status: live.status });
+    }
+
+    const call = await Call.findByPk(callId, { attributes: ['id', 'callerId', 'receiverId', 'status'] });
+    if (!call || (call.callerId !== userId && call.receiverId !== userId)) {
+      return res.status(404).json({ error: 'Call not found' });
+    }
+    // The row says 'initiated'/'answered' until the call ends; without the live
+    // Redis entry the call is over either way
+    const status = ['initiated', 'answered'].includes(call.status) ? 'ended' : call.status;
+    res.json({ callId, status });
+  } catch (error) {
+    console.error('Error getting call status:', error);
+    res.status(500).json({ error: 'Failed to get call status' });
+  }
+});
+
+// Clears call state left behind by a previous session (the app calls this on startup).
+// A call still ringing for this user is kept: the app may have been started by the
+// push for that very call.
 router.post('/clear-status', async (req, res) => {
   try {
     const userId = req.user.id;
     const redisService = require('../config/redis');
-    
-    console.log(`🧹 Clearing call status for user ${userId}`);
-    
-    // Get current call status
-    const callId = await redisService.getUserCallStatus(userId);
-    
-    if (callId) {
-      console.log(`Found call status: ${callId}, removing...`);
-      await redisService.deleteUserCallStatus(userId);
-      
-      // Also try to clean up the call itself if it exists
-      const callData = await redisService.getActiveCall(callId);
-      if (callData) {
-        console.log(`Found active call data, cleaning up...`);
-        await redisService.deleteActiveCall(callId);
-        
-        // Clean up other participant too
-        const otherUserId = callData.callerId === userId ? callData.receiverId : callData.callerId;
-        await redisService.deleteUserCallStatus(otherUserId);
-      }
-      
-      res.json({ 
-        success: true, 
-        message: 'Call status cleared',
-        clearedCallId: callId
-      });
-    } else {
-      res.json({ 
-        success: true, 
-        message: 'No call status found'
-      });
+
+    const callId = (await redisService.getUserCallStatus(userId))?.callId;
+    if (!callId) {
+      return res.json({ success: true, message: 'No call status found' });
     }
+
+    const callData = await redisService.getActiveCall(callId);
+    if (callData?.status === 'ringing' && callData.receiverId === userId) {
+      return res.json({ success: true, message: 'Call still ringing, kept' });
+    }
+
+    console.log(`🧹 Clearing call status ${callId} for user ${userId}`);
+    await redisService.deleteUserCallStatus(userId);
+    if (callData) {
+      await redisService.deleteActiveCall(callId);
+      const otherUserId = callData.callerId === userId ? callData.receiverId : callData.callerId;
+      await redisService.deleteUserCallStatus(otherUserId);
+    }
+
+    res.json({
+      success: true,
+      message: 'Call status cleared',
+      clearedCallId: callId
+    });
   } catch (error) {
     console.error('Error clearing call status:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: 'Failed to clear call status',
       error: error.message
     });

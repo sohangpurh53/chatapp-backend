@@ -96,17 +96,13 @@ class FCMService {
 
       console.log(`📱 Found ${activeTokens.length} active device(s) for user ${userId}`);
 
-      // Send to all active devices
-      const results = [];
-      for (const tokenInfo of activeTokens) {
-        try {
-          const result = await this.sendToDevice(userId, notification, tokenInfo);
-          results.push(result);
-        } catch (error) {
+      // Send to all active devices at once (a ringing call waits on the slowest one otherwise)
+      const results = await Promise.all(activeTokens.map(tokenInfo =>
+        this.sendToDevice(userId, notification, tokenInfo).catch(error => {
           console.error(`❌ Failed to send to device ${tokenInfo.deviceId}:`, error);
-          results.push({ success: false, error: error.message, deviceId: tokenInfo.deviceId });
-        }
-      }
+          return { success: false, error: error.message, deviceId: tokenInfo.deviceId };
+        })
+      ));
 
       // Check if at least one device received the notification
       const successCount = results.filter(r => r.success).length;
@@ -210,11 +206,15 @@ class FCMService {
                                  notification?.data?.type === 'incoming_call_with_signal' ||
                                  notification?.data?.type === 'incoming_call_offline';
 
+      // Sent data-only so the app's background handler runs and stops the ringing
+      // notification; a system "Call ended" notification left it ringing
+      const isCallEnded = notification.type === 'call_ended';
+
       // Encrypted chat messages are sent data-only so the app can decrypt them
       // and display the real text instead of the "Encrypted message" placeholder
       const isEncryptedMessage = notification.type === 'new_message' &&
                                  notification?.data?.isEncrypted === 'true';
-      const isDataOnly = isCallNotification || isEncryptedMessage;
+      const isDataOnly = isCallNotification || isCallEnded || isEncryptedMessage;
 
       const message = {
         token: fcmToken,
@@ -235,9 +235,12 @@ class FCMService {
         },
         android: {
           // ✅ Use high priority for call notifications
-          priority: (isEncryptedMessage || notification.type === 'incoming_call' ||
+          priority: (isEncryptedMessage || isCallEnded || notification.type === 'incoming_call' ||
                      notification?.data?.type === 'incoming_call_with_signal' ||
                      notification?.data?.type === 'incoming_call_offline') ? 'high' : 'normal',
+          // A ring delivered after the call stopped ringing is worse than none (FCM keeps
+          // undelivered messages for 4 weeks by default)
+          ...(notification.ttlMs && { ttl: notification.ttlMs }),
           // ✅ FIXED: Only include notification config for non-call notifications
           ...(!isDataOnly && {
             notification: {
