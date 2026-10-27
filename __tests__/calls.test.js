@@ -198,6 +198,45 @@ describe('calls', () => {
     assert.equal(pending.size, 0);
   });
 
+  test('an offer relayed into a half-open socket is still there when the phone answers from the push', async () => {
+    connect('alice');
+    connect('bob'); // looks connected, but never acknowledges anything
+    const { callId } = await startCall();
+    await handlers.handleCallSignal(socketFor('alice'), { callId, targetUserId: 'bob', signal: { type: 'offer', sdp: 'v=0' } });
+    await handlers.handleCallSignal(socketFor('alice'), { callId, targetUserId: 'bob', signal: { type: 'ice-candidate' } });
+    assert.equal(emitsTo('user_bob', 'call_signal').length, 2);
+
+    const fromPush = socketFor('bob', 'bob-new-socket');
+    await handlers.handleAnswerCall(fromPush, { callId, hasOffer: false });
+
+    assert.deepEqual(fromPush.emitted.filter(e => e.event === 'call_signal').map(e => e.data.signal.type), ['offer', 'ice-candidate']);
+    assert.equal(emitsTo('user_alice', 'call_signal').length, 0);
+  });
+
+  test('a receiver that got the offer live drops the stored copy on answer', async () => {
+    connect('alice');
+    connect('bob');
+    ackers.add('bob-socket');
+    const { callId } = await startCall();
+    await handlers.handleCallSignal(socketFor('alice'), { callId, targetUserId: 'bob', signal: { type: 'offer', sdp: 'v=0' } });
+
+    await handlers.handleAnswerCall(socketFor('bob'), { callId, hasOffer: true });
+
+    assert.equal(pending.size, 0);
+  });
+
+  test('signals during the call itself are only relayed', async () => {
+    connect('alice');
+    connect('bob');
+    ackers.add('bob-socket');
+    const { callId } = await startCall();
+    await handlers.handleAnswerCall(socketFor('bob'), { callId, hasOffer: true });
+
+    await handlers.handleCallSignal(socketFor('alice'), { callId, targetUserId: 'bob', signal: { type: 'ice-candidate' } });
+
+    assert.equal(pending.size, 0);
+  });
+
   test('answering without a stored offer asks the caller for a fresh one', async () => {
     connect('alice');
     const { callId } = await startCall();

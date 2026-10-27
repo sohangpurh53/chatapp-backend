@@ -1574,14 +1574,21 @@ class SocketHandlers {
       }
 
       const relay = { callId, signal, fromUserId: socket.userId };
-      if (this.isUserConnected(targetUserId)) {
+      const connected = this.isUserConnected(targetUserId);
+      if (connected) {
         this.io.to(this.userRoom(targetUserId)).emit('call_signal', relay);
-        return;
       }
 
-      // No socket: a phone still waking up from the push, or an app reconnecting after
-      // a network change. Kept until it answers, or reconnects mid-call. A new offer
-      // replaces everything stored before it (an ICE restart makes old candidates useless).
+      // Kept until the receiver answers (answer_call hands it over when the app says it
+      // has no offer) or reconnects mid-call. While the call rings this happens even
+      // when a socket is connected: a backgrounded app's socket can be half-open (Doze,
+      // MIUI battery saver), so the live copy never arrives and the phone answers from
+      // the push on a new socket. A new offer replaces everything stored before it
+      // (an ICE restart makes old candidates useless).
+      const ringingReceiver = callData.status === 'ringing' && targetUserId === callData.receiverId;
+      if (connected && !ringingReceiver) {
+        return;
+      }
       if (signal.type === 'offer') {
         await redisService.deletePendingSignals(targetUserId, callId);
       }
