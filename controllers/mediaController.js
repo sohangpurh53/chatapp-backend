@@ -21,16 +21,31 @@ const uploadFile = async (req, res) => {
 
     console.log(`📤 User ${userId} uploading ${fileType}: ${file.originalname} (${formatFileSize(file.size)})`);
 
-    // Upload to MinIO
-    const uploadResult = await mediaService.uploadFile(file, userId, fileType);
-
     // End-to-end encrypted uploads are ciphertext: there is no picture to make a
     // thumbnail of (and the server must not see one)
     const encrypted = req.body?.encrypted === '1';
 
-    // Generate thumbnail for images
+    // Profile and group photos are stored small; chat attachments are kept as sent
+    const isAvatar = req.body?.purpose === 'avatar' && fileType === 'image' && !encrypted;
+    let toStore = file;
+    if (isAvatar) {
+      try {
+        toStore = await mediaService.compressAvatar(file);
+        console.log(`🗜️  Avatar compressed: ${formatFileSize(file.size)} -> ${formatFileSize(toStore.size)}`);
+      } catch (compressError) {
+        return res.status(400).json({
+          error: 'Invalid image',
+          message: 'That file could not be read as an image'
+        });
+      }
+    }
+
+    // Upload to MinIO
+    const uploadResult = await mediaService.uploadFile(toStore, userId, fileType);
+
+    // Generate thumbnail for images (an avatar is already small)
     let thumbnailUrl = null;
-    if (fileType === 'image' && !encrypted) {
+    if (fileType === 'image' && !encrypted && !isAvatar) {
       thumbnailUrl = await mediaService.generateThumbnail(
         file,
         uploadResult.objectName

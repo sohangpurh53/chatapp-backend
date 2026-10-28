@@ -4,6 +4,8 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const mime = require('mime-types');
 
+const AVATAR_MAX_SIZE = 512;
+
 class MediaService {
   /**
    * Upload file to MinIO
@@ -49,6 +51,27 @@ class MediaService {
       console.error('❌ Upload file error:', error);
       throw new Error(`Failed to upload file: ${error.message}`);
     }
+  }
+
+  /**
+   * Profile and group photos are shown small, so they're stored small: at most
+   * AVATAR_MAX_SIZE px on a side, upright, as a JPEG. Throws if the bytes aren't an image.
+   */
+  async compressAvatar(file) {
+    const buffer = await sharp(file.buffer)
+      .rotate() // apply the camera's orientation, then drop the tag
+      .resize(AVATAR_MAX_SIZE, AVATAR_MAX_SIZE, { fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: '#ffffff' }) // JPEG has no transparency
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer();
+
+    return {
+      ...file,
+      buffer,
+      size: buffer.length,
+      mimetype: 'image/jpeg',
+      originalname: `${path.basename(file.originalname, path.extname(file.originalname)) || 'avatar'}.jpg`,
+    };
   }
 
   /**
