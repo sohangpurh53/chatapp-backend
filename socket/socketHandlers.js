@@ -4,6 +4,7 @@ const redisService = require('../config/redis');
 const { v4: uuidv4 } = require('uuid');
 const notificationService = require('../services/notificationService');
 const { isUuid } = require('../utils/ids');
+const { blockState, directPeerId } = require('../utils/blocks');
 
 // How long a call rings before it counts as missed. A phone woken by a push needs
 // time to start the app and connect before the answer reaches us.
@@ -30,6 +31,7 @@ class SocketHandlers {
       ringAckTimeoutMs: RING_ACK_TIMEOUT_MS,
       reconnectGraceMs: { ...CALL_RECONNECT_GRACE_MS },
     };
+    this.shadowCalls = new Map(); // callId -> ring timer of a call to someone who blocked the caller
     this.lastWaveAt = new Map(); // `${from}:${to}` -> timestamp (rate limit)
   }
 
@@ -338,6 +340,26 @@ class SocketHandlers {
       if (!chat) {
         fail({ message: 'Chat not found', code: 'CHAT_NOT_FOUND', chatId });
         return;
+      }
+
+      // A blocked pair can't message each other. Whoever blocked knows it and is told;
+      // the person who was blocked is not: their message looks sent but is dropped.
+      const peerId = directPeerId(chat, socket.userId);
+      if (peerId) {
+        const { blockedByMe, blockedByThem } = await blockState(socket.userId, peerId);
+        if (blockedByMe) {
+          fail({ message: 'You blocked this user', code: 'USER_BLOCKED', chatId });
+          return;
+        }
+        if (blockedByThem) {
+          this.acknowledgeSent(
+            socket,
+            respond,
+            { id: clientMessageId || uuidv4(), chatId, createdAt: new Date(), isEncrypted },
+            false
+          );
+          return;
+        }
       }
 
       // Group rules: announcement mode and slow mode (admins are exempt)
@@ -713,7 +735,7 @@ class SocketHandlers {
   // Orbit: waves (ephemeral nudges) and vibes (24h mood aura)
   // ---------------------------------------------------------------------------
 
-  handleWaveSend(socket, data) {
+  async handleWaveSend(socket, data) {
     const toUserId = data && typeof data.toUserId === 'string' ? data.toUserId : null;
     const emoji = data && typeof data.emoji === 'string' && data.emoji.length <= 8 ? data.emoji : '\u{1F44B}';
 
@@ -727,6 +749,11 @@ class SocketHandlers {
       return socket.emit('wave_result', { toUserId, delivered: false, reason: 'rate_limited' });
     }
     this.lastWaveAt.set(key, now);
+
+    const waveBlock = await blockState(socket.userId, toUserId);
+    if (waveBlock.blockedByMe || waveBlock.blockedByThem) {
+      return socket.emit('wave_result', { toUserId, delivered: false, reason: 'offline' });
+    }
 
     const targetSocketId = this.connectedUsers.get(toUserId);
     if (!targetSocketId) {
@@ -1295,6 +1322,15 @@ class SocketHandlers {
         socket.emit('call_error', { message: 'User not found' });
         return;
       }
+      const { blockedByMe, blockedByThem } = await blockState(socket.userId, receiverId);
+      if (blockedByMe) {
+        socket.emit('call_error', { message: 'You blocked this user', code: 'USER_BLOCKED' });
+        return;
+      }
+      if (blockedByThem) {
+        this.startShadowCall(socket, receiverId, callType);
+        return;
+      }
 
       // The app only lets you call when it has no call of its own, so a call the
       // server still has for the caller is dead: end it properly
@@ -1360,6 +1396,32 @@ class SocketHandlers {
       console.error('Initiate call error:', error);
       socket.emit('call_error', { message: 'Failed to initiate call' });
     }
+  }
+
+  /**
+   * A call to someone who blocked the caller. It must look like a call nobody answers:
+   * the receiver is never rung and nothing is stored, and the caller gets the usual
+   * "missed" after the ring time.
+   */
+  startShadowCall(socket, receiverId, callType) {
+    const callId = uuidv4();
+    const callerId = socket.userId;
+    const timer = setTimeout(() => {
+      this.shadowCalls.delete(callId);
+      this.io.to(this.userRoom(callerId)).emit('call_missed', { callId });
+    }, this.timings.ringTimeoutMs);
+    this.shadowCalls.set(callId, timer);
+    socket.emit('call_initiated', { callId, receiverId, callType, status: 'calling', receiverOnline: false });
+  }
+
+  /** True when `callId` was a shadow call (now ended) */
+  endShadowCall(socket, callId) {
+    const timer = callId && this.shadowCalls.get(callId);
+    if (!timer) return false;
+    clearTimeout(timer);
+    this.shadowCalls.delete(callId);
+    socket.emit('call_ended', { callId, endedBy: socket.userId, reason: 'user_ended' });
+    return true;
   }
 
   /**
@@ -1547,6 +1609,8 @@ class SocketHandlers {
   async handleEndCall(socket, data) {
     try {
       const { callId } = data || {};
+
+      if (this.endShadowCall(socket, callId)) return;
 
       const callData = await redisService.getActiveCall(callId);
       if (!callData) {

@@ -17,6 +17,7 @@ const DeviceLink = require('./DeviceLink');
 const AiProviderConfig = require('./AiProviderConfig');
 const AiUserSettings = require('./AiUserSettings');
 const AiUsageEvent = require('./AiUsageEvent');
+const UserBlock = require('./UserBlock');
 
 // User associations
 User.hasMany(Message, { foreignKey: 'senderId', as: 'sentMessages' });
@@ -123,8 +124,12 @@ User.hasOne(AiUserSettings, { foreignKey: 'userId', as: 'aiSettings', onDelete: 
 AiUserSettings.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 User.hasMany(AiUsageEvent, { foreignKey: 'userId', as: 'aiUsage', onDelete: 'CASCADE' });
 
+User.hasMany(UserBlock, { foreignKey: 'blockerId', as: 'blocks', onDelete: 'CASCADE' });
+UserBlock.belongsTo(User, { foreignKey: 'blockedId', as: 'blocked' });
+
 module.exports = {
   sequelize,
+  UserBlock,
   User,
   Chat,
   Message,

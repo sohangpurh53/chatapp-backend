@@ -1,6 +1,7 @@
 const { Chat, User, Message, ChatParticipant, MessageReceipt, GroupInvite, UserMessageDeletion } = require('../models');
 const { Op } = require('sequelize');
 const { isUuid, ZERO_UUID } = require('../utils/ids');
+const { blockState, blockedByUser } = require('../utils/blocks');
 const {
   isAdminRole,
   DEFAULT_GROUP_SETTINGS,
@@ -32,6 +33,13 @@ const createChat = async (req, res) => {
     // Check if direct chat already exists
     if (!isGroup) {
       const otherUserId = participantIds[0];
+
+      // Only the blocker is told. Someone who was blocked can still open the chat;
+      // what they send is dropped without a word.
+      if ((await blockState(userId, otherUserId)).blockedByMe) {
+        await transaction.rollback();
+        return res.status(403).json({ error: 'You blocked this user', code: 'USER_BLOCKED' });
+      }
       
       // ✅ ROBUST FIX: Check for existing chat (including soft-deleted ones)
       const existingChat = await Chat.findOne({
@@ -579,10 +587,13 @@ const searchUsers = async (req, res) => {
       return res.status(400).json({ error: 'Search query must be at least 2 characters' });
     }
 
+    // People you blocked are hidden from your search. People who blocked you stay
+    // visible so you can't tell.
+    const excludedIds = [currentUserId, ...(await blockedByUser(currentUserId))];
     const users = await User.findAll({
       where: {
         [Op.and]: [
-          { id: { [Op.ne]: currentUserId } },
+          { id: { [Op.notIn]: excludedIds } },
           {
             [Op.or]: [
               { username: { [Op.iLike]: `%${query}%` } },

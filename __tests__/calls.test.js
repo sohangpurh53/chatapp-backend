@@ -17,7 +17,7 @@ require.cache[require.resolve('../services/fcmService')] = {
   id: 'fcmService', loaded: true, exports: fcmService,
 };
 
-const { Call, User } = require('../models');
+const { Call, User, UserBlock } = require('../models');
 const redisService = require('../config/redis');
 const SocketHandlers = require('../socket/socketHandlers');
 
@@ -105,6 +105,7 @@ describe('calls', () => {
       pending.set(key, [...(pending.get(key) || []), signal]);
     });
     stub(User, 'findByPk', async (id) => ({ id, username: id, avatar: null }));
+    stub(UserBlock, 'findAll', async () => []); // nobody is blocked here
     stub(Call, 'create', async () => ({}));
     stub(Call, 'update', async () => [1]);
   });

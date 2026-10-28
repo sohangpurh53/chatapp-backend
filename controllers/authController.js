@@ -226,6 +226,7 @@ const googleLogin = async (req, res) => {
     }
 
     const { sub: googleId, email, name, picture } = payload;
+    const googleNames = splitGoogleNames(payload);
 
     if (!email) {
       return res.status(400).json({ error: 'Google account has no email' });
@@ -251,11 +252,17 @@ const googleLogin = async (req, res) => {
           authProvider: 'google',
           googleId,
           avatar: picture || null,
+          ...googleNames,
         });
       }
     }
 
-    await user.update({ isOnline: true, lastSeen: new Date() });
+    // Names Google knows fill the gaps only: ones the user typed themselves are kept
+    const missingNames = {};
+    for (const key of ['firstName', 'middleName', 'lastName']) {
+      if (!user[key] && googleNames[key]) missingNames[key] = googleNames[key];
+    }
+    await user.update({ isOnline: true, lastSeen: new Date(), ...missingNames });
 
     const session = await sessionService.createSession(user.id, req);
     const token = generateToken(user.id, session.id);
@@ -344,15 +351,34 @@ const logout = async (req, res) => {
   }
 };
 
+const { visibleDetails, normalizePrivacy, parseDetailsUpdate, PRIVATE_FIELDS } = require('../utils/profilePrivacy');
+const { blockState } = require('../utils/blocks');
+
+// Google sends given_name ("Anna Maria") and family_name ("Smith"), not a middle name:
+// the first word of the given name is the first name, the rest the middle name.
+const splitGoogleNames = (payload) => {
+  const clean = (v) => (typeof v === 'string' ? v.trim().slice(0, 50) : '') || null;
+  let given = typeof payload.given_name === 'string' ? payload.given_name.trim() : '';
+  let family = typeof payload.family_name === 'string' ? payload.family_name.trim() : '';
+  if (!given && !family && typeof payload.name === 'string') {
+    const parts = payload.name.trim().split(/\s+/).filter(Boolean);
+    given = parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0] || '';
+    family = parts.length > 1 ? parts[parts.length - 1] : '';
+  }
+  const [first, ...middle] = given.split(/\s+/).filter(Boolean);
+  return { firstName: clean(first), middleName: clean(middle.join(' ')), lastName: clean(family) };
+};
+
 const getProfile = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey', 'encryptionEnabled', 'encryptedPrivateKey']
+      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey', 'encryptionEnabled', 'encryptedPrivateKey',
+        ...PRIVATE_FIELDS, 'profilePrivacy']
     });
 
     // hasKeyBackup tells the app whether a password can unlock this account's keys
-    const { encryptedPrivateKey, ...profile } = user.toJSON();
-    res.json({ user: { ...profile, hasKeyBackup: !!encryptedPrivateKey } });
+    const { encryptedPrivateKey, profilePrivacy, ...profile } = user.toJSON();
+    res.json({ user: { ...profile, profilePrivacy: normalizePrivacy(profilePrivacy), hasKeyBackup: !!encryptedPrivateKey } });
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -664,21 +690,31 @@ const getUserInfo = async (req, res) => {
     }
     
     const user = await User.findByPk(userId, {
-      attributes: ['id', 'username', 'avatar', 'isOnline', 'lastSeen', 'createdAt']
+      attributes: ['id', 'username', 'avatar', 'isOnline', 'lastSeen', 'createdAt', ...PRIVATE_FIELDS, 'profilePrivacy']
     });
     
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
+
+    const viewerId = req.user.id;
+    const { blockedByMe, blockedByThem } = await blockState(viewerId, user.id);
+    // Someone who blocked you looks like anyone who keeps their presence and details
+    // private; nothing here tells you that you were blocked.
+    const hidden = blockedByThem;
+    const details = hidden ? {} : await visibleDetails(user, viewerId);
+
     res.json({
       data: {
         id: user.id,
         username: user.username,
         avatar: user.avatar,
-        isOnline: user.isOnline,
-        lastSeen: user.lastSeen,
-        joinedAt: user.createdAt
+        isOnline: hidden ? false : user.isOnline,
+        lastSeen: hidden ? null : user.lastSeen,
+        joinedAt: user.createdAt,
+        details,
+        blockedByMe,
+        isBlocked: blockedByMe
       }
     });
   } catch (error) {
@@ -692,10 +728,17 @@ const updateProfile = async (req, res) => {
     const { username, email, avatar } = req.body;
     const userId = req.user.id;
 
+    const details = parseDetailsUpdate(req.body);
+    if (details.error) {
+      return res.status(400).json({ error: details.error });
+    }
+    const { profilePrivacyPatch, ...detailFields } = details.data;
+    const hasDetails = Object.keys(detailFields).length > 0 || !!profilePrivacyPatch;
+
     // Validate input
-    if (!username && !email && avatar === undefined) {
+    if (!username && !email && avatar === undefined && !hasDetails) {
       return res.status(400).json({
-        error: 'At least one field (username, email, or avatar) is required'
+        error: 'At least one field (username, email, avatar, or personal details) is required'
       });
     }
 
@@ -756,6 +799,12 @@ const updateProfile = async (req, res) => {
       updateData.avatar = avatar;
     }
 
+    Object.assign(updateData, detailFields);
+    if (profilePrivacyPatch) {
+      const current = await User.findByPk(userId, { attributes: ['profilePrivacy'] });
+      updateData.profilePrivacy = { ...normalizePrivacy(current?.profilePrivacy), ...profilePrivacyPatch };
+    }
+
     // Update user profile
     await User.update(updateData, {
       where: { id: userId }
@@ -763,12 +812,15 @@ const updateProfile = async (req, res) => {
 
     // Get updated user data
     const updatedUser = await User.findByPk(userId, {
-      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey', 'encryptionEnabled', 'encryptedPrivateKey']
+      attributes: ['id', 'username', 'email', 'avatar', 'isOnline', 'lastSeen', 'publicKey', 'encryptionEnabled', 'encryptedPrivateKey',
+        ...PRIVATE_FIELDS, 'profilePrivacy']
     });
 
     res.json({
       message: 'Profile updated successfully',
       user: {
+        ...Object.fromEntries(PRIVATE_FIELDS.map(f => [f, updatedUser[f]])),
+        profilePrivacy: normalizePrivacy(updatedUser.profilePrivacy),
         id: updatedUser.id,
         username: updatedUser.username,
         email: updatedUser.email,
@@ -956,6 +1008,7 @@ const refreshToken = async (req, res) => {
 };
 
 module.exports = {
+  splitGoogleNames,
   register,
   login,
   googleLogin,

@@ -23,6 +23,7 @@ const {
   validateEncryptionSession,
   getEncryptionStats
 } = require('../controllers/authController');
+const blockController = require('../controllers/blockController');
 
 router.post('/register', register);
 router.post('/login', login);
@@ -40,6 +41,9 @@ router.get('/profile', authenticateToken, getProfile);
 router.put('/profile', authenticateToken, updateProfile);
 router.get('/users/:userId/public-key', authenticateToken, getUserPublicKey);
 router.get('/users/:userId', authenticateToken, getUserInfo);
+router.get('/blocked-users', authenticateToken, blockController.listBlockedUsers);
+router.post('/users/:userId/block', authenticateToken, blockController.blockUser);
+router.delete('/users/:userId/block', authenticateToken, blockController.unblockUser);
 
 // Enhanced encryption key management endpoints
 router.post('/keys', authenticateToken, uploadKeys);

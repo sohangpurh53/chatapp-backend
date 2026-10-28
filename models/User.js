@@ -39,6 +39,19 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING,
     allowNull: true
   },
+  // Optional personal details. All nullable; who may see each one is in profilePrivacy.
+  // Google sign-in fills the three names.
+  firstName: { type: DataTypes.STRING(50), allowNull: true },
+  middleName: { type: DataTypes.STRING(50), allowNull: true },
+  lastName: { type: DataTypes.STRING(50), allowNull: true },
+  bio: { type: DataTypes.STRING(300), allowNull: true },
+  phone: { type: DataTypes.STRING(32), allowNull: true },
+  dateOfBirth: { type: DataTypes.DATEONLY, allowNull: true },
+  gender: { type: DataTypes.STRING(20), allowNull: true },
+  location: { type: DataTypes.STRING(100), allowNull: true },
+  website: { type: DataTypes.STRING(200), allowNull: true },
+  // { bio: 'me'|'contacts'|'everyone', ... }; a missing field means 'me'
+  profilePrivacy: { type: DataTypes.JSON, allowNull: true },
   isOnline: {
     type: DataTypes.BOOLEAN,
     defaultValue: false

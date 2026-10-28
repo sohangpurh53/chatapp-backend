@@ -24,7 +24,7 @@ require.cache[require.resolve('../../services/fcmService')] = {
 };
 
 const redisService = require('../../config/redis');
-const { Call, User, Chat } = require('../../models');
+const { Call, User, Chat, UserBlock } = require('../../models');
 const SocketHandlers = require('../../socket/socketHandlers');
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -76,6 +76,8 @@ function installCallStore() {
     const key = `${userId}:${callId}`;
     store.pending.set(key, [...(store.pending.get(key) || []), signal]);
   });
+  // Nobody is blocked in these tests (blocks are covered in blocksAndPrivacy.test.js)
+  stub(UserBlock, 'findAll', async () => []);
   stub(redisService, 'setUserOnline', async () => {});
   stub(redisService, 'setUserOffline', async () => {});
 
