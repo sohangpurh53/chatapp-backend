@@ -20,11 +20,14 @@ const generateRefreshToken = (userId, sid) => {
 
 const register = async (req, res) => {
   try {
-    const { username, password, publicKey, encryptedPrivateKey, keySalt, keyIv } = req.body;
+    const { password, publicKey, encryptedPrivateKey, keySalt, keyIv } = req.body;
     const email = normalizeEmail(req.body.email);
+    const firstName = typeof req.body.firstName === 'string' ? req.body.firstName.trim() : '';
+    const lastName = typeof req.body.lastName === 'string' ? req.body.lastName.trim() : '';
 
     console.log('📥 Registration request received:', {
-      username,
+      firstName,
+      lastName,
       email,
       hasPassword: !!password,
       hasPublicKey: !!publicKey,
@@ -34,9 +37,15 @@ const register = async (req, res) => {
     });
 
     // Validate input
-    if (!username || !email || !password) {
+    if (!firstName || !lastName || !email || !password) {
       return res.status(400).json({
-        error: 'Username, email, and password are required'
+        error: 'First name, last name, email, and password are required'
+      });
+    }
+
+    if (firstName.length > 50 || lastName.length > 50) {
+      return res.status(400).json({
+        error: 'Names must be 50 characters or fewer'
       });
     }
 
@@ -47,21 +56,22 @@ const register = async (req, res) => {
     }
 
     // Check if user already exists (email compared ignoring case)
-    const existingUser = await User.findOne({
-      where: {
-        [Op.or]: [emailMatches(email), { username }]
-      }
-    });
+    const existingUser = await User.findOne({ where: emailMatches(email) });
 
     if (existingUser) {
       return res.status(400).json({
-        error: 'User with this email or username already exists'
+        error: 'User with this email already exists'
       });
     }
+
+    // The signup form has no username: derive a unique one, as Google sign-in does
+    const username = await generateUsernameFromEmail(email);
 
     // Create new user with encryption keys
     const userData = {
       username,
+      firstName,
+      lastName,
       email,
       password,
       keyVersion: 1,
@@ -105,6 +115,8 @@ const register = async (req, res) => {
       user: {
         id: user.id,
         username: user.username,
+        firstName: user.firstName,
+        lastName: user.lastName,
         email: user.email,
         avatar: user.avatar,
         isOnline: user.isOnline,
@@ -738,7 +750,7 @@ const updateProfile = async (req, res) => {
     // Validate input
     if (!username && !email && avatar === undefined && !hasDetails) {
       return res.status(400).json({
-        error: 'At least one field (username, email, avatar, or personal details) is required'
+        error: 'At least one field (username, avatar, or personal details) is required'
       });
     }
 
@@ -769,30 +781,15 @@ const updateProfile = async (req, res) => {
       updateData.username = username.trim();
     }
 
+    // Email is the sign-in identity and can't be changed here. Older app builds
+    // still send the current one with every save, so only a different one is refused.
     if (email) {
-      // Basic email validation
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
+      const current = await User.findByPk(userId, { attributes: ['email'] });
+      if (!current || normalizeEmail(current.email) !== normalizeEmail(email)) {
         return res.status(400).json({
-          error: 'Please enter a valid email address'
+          error: 'Email cannot be changed'
         });
       }
-      
-      // Check if email is already taken by another user
-      const existingUser = await User.findOne({
-        where: {
-          email: email.trim().toLowerCase(),
-          id: { [Op.ne]: userId }
-        }
-      });
-      
-      if (existingUser) {
-        return res.status(400).json({
-          error: 'Email is already taken'
-        });
-      }
-      
-      updateData.email = email.trim().toLowerCase();
     }
 
     if (avatar !== undefined) {
