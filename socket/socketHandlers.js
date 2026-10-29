@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const notificationService = require('../services/notificationService');
 const { isUuid } = require('../utils/ids');
 const { blockState, directPeerId } = require('../utils/blocks');
+const { registerGameHandlers } = require('./gameHandlers');
 
 // How long a call rings before it counts as missed. A phone woken by a push needs
 // time to start the app and connect before the answer reaches us.
@@ -104,6 +105,9 @@ class SocketHandlers {
     // Orbit: ephemeral waves + vibes
     socket.on('wave_send', (data) => this.handleWaveSend(socket, data));
     socket.on('vibe_update', (data) => this.handleVibeUpdate(socket, data));
+
+    // In-chat games (sessions, answers; see socket/gameHandlers.js)
+    registerGameHandlers(socket);
     
 
     // ✅ UNIFIED CALL EVENTS - Use only initiate_call (remove duplicate initiate-call)
@@ -373,7 +377,8 @@ class SocketHandlers {
         const slowModeSeconds = Number(groupSettings.slowModeSeconds) || 0;
         if (!isAdmin && slowModeSeconds > 0) {
           const lastOwn = await Message.findOne({
-            where: { chatId, senderId: socket.userId, messageType: { [Op.ne]: 'system' } },
+            // Game cards are posted by the server, not typed by the user
+            where: { chatId, senderId: socket.userId, messageType: { [Op.notIn]: ['system', 'game'] } },
             order: [['createdAt', 'DESC']],
             attributes: ['createdAt']
           });

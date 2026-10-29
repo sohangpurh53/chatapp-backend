@@ -32,6 +32,7 @@ const mediaRoutes = require('./routes/media');
 const appLogsRoutes = require("./routes/applogs")
 const apkRoutes = require('./routes/apk');
 const aiRoutes = require('./routes/ai');
+const gameRoutes = require('./routes/games');
 
 const app = express();
 const server = http.createServer(app);
@@ -49,6 +50,7 @@ setupSocketAdapter(io);
 // Controllers push real-time group updates through this
 app.set('io', io);
 require('./services/sessionService').setIO(io);
+require('./services/games').setIO(io);
 
 // Middleware
 app.use(cors());
@@ -83,6 +85,7 @@ app.use('/api/media', mediaRoutes);
 app.use("/api", appLogsRoutes);
 app.use('/api/apk', apkRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/games', gameRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -134,6 +137,9 @@ async function startServer() {
 
     // Users marked online before a restart/crash have no socket any more
     await socketHandlers.resetOnlineStatuses();
+
+    // Game sessions whose timer was lost in a restart move on from here
+    require('./services/games').startSweeper();
 
     // Initialize MinIO bucket
     const { initializeBucket } = require('./config/minio');

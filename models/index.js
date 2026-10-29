@@ -18,6 +18,8 @@ const AiProviderConfig = require('./AiProviderConfig');
 const AiUserSettings = require('./AiUserSettings');
 const AiUsageEvent = require('./AiUsageEvent');
 const UserBlock = require('./UserBlock');
+const GameSession = require('./GameSession');
+const GameResult = require('./GameResult');
 
 // User associations
 User.hasMany(Message, { foreignKey: 'senderId', as: 'sentMessages' });
@@ -127,8 +129,17 @@ User.hasMany(AiUsageEvent, { foreignKey: 'userId', as: 'aiUsage', onDelete: 'CAS
 User.hasMany(UserBlock, { foreignKey: 'blockerId', as: 'blocks', onDelete: 'CASCADE' });
 UserBlock.belongsTo(User, { foreignKey: 'blockedId', as: 'blocked' });
 
+// In-chat games: sessions live and die with their chat
+Chat.hasMany(GameSession, { foreignKey: 'chatId', as: 'gameSessions', onDelete: 'CASCADE' });
+GameSession.belongsTo(Chat, { foreignKey: 'chatId', as: 'chat' });
+GameSession.hasMany(GameResult, { foreignKey: 'sessionId', as: 'results', onDelete: 'CASCADE' });
+GameResult.belongsTo(GameSession, { foreignKey: 'sessionId', as: 'session' });
+User.hasMany(GameResult, { foreignKey: 'userId', as: 'gameResults', onDelete: 'CASCADE' });
+
 module.exports = {
   sequelize,
+  GameSession,
+  GameResult,
   UserBlock,
   User,
   Chat,

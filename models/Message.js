@@ -56,7 +56,9 @@ const Message = sequelize.define('Message', {
     comment: 'Additional encryption metadata (compression, chunking, etc.)'
   },
   messageType: {
-    type: DataTypes.ENUM('text', 'image', 'file', 'audio', 'video', 'system'),
+    // 'game': an invite or result card posted by the server (plaintext, data in
+    // encryptionMetadata.game; see services/games)
+    type: DataTypes.ENUM('text', 'image', 'file', 'audio', 'video', 'system', 'game'),
     defaultValue: 'text'
   },
   fileUrl: {
