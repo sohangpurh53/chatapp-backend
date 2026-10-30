@@ -2,6 +2,7 @@
 // whether it came from the AI model or from an app saving a game, so neither can
 // put something into the engine that it can't run fairly. Pure, no I/O.
 const { GameError } = require('./errors');
+const { isUuid } = require('../../utils/ids');
 
 const LIMITS = {
   titleChars: 60,
@@ -74,6 +75,7 @@ const validateGame = (input) => {
       rules: clean(input.rules, LIMITS.rulesChars),
       // Built from chat messages: holds real names, so AI may not change it later
       fromConversation: input.fromConversation === true,
+      sourceChatId: input.fromConversation === true && isUuid(input.sourceChatId) ? input.sourceChatId : null,
       roundSeconds: Math.min(LIMITS.maxRoundSeconds, Math.max(LIMITS.minRoundSeconds, seconds)),
       rounds: unique.map((round, i) => ({ ...round, id: `c${i + 1}` })),
     },

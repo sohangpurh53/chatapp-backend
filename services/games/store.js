@@ -98,6 +98,19 @@ const dbStore = {
     });
   },
 
+  async markSettled(id) {
+    await GameSession.update({ settledAt: new Date() }, { where: { id } });
+  },
+
+  /** Ended before `before`, with results or cards possibly still to write. */
+  async findUnsettled(before, limit = 20) {
+    const rows = await GameSession.findAll({
+      where: { status: { [Op.notIn]: OPEN_STATUSES }, settledAt: null, endedAt: { [Op.lte]: new Date(before) } },
+      limit,
+    });
+    return rows.map(toSession);
+  },
+
   /** Open sessions whose clock should already have moved them on. */
   async findDue(now, limit = 50) {
     const rows = await GameSession.findAll({
@@ -130,6 +143,10 @@ const dbStore = {
     return row ? row.get({ plain: true }) : null;
   },
 
+  async hasChallengeFrom(sourceSessionId, challengerId) {
+    return (await GameChallenge.count({ where: { sourceSessionId, challengerId } })) > 0;
+  },
+
   /** Same contract as update(): `change` returns new values, or null for no change. */
   async updateChallenge(id, change) {
     return sequelize.transaction(async (transaction) => {
@@ -143,7 +160,7 @@ const dbStore = {
 
   async findExpiredChallengeIds(now, limit = 50) {
     const rows = await GameChallenge.findAll({
-      where: { status: 'pending', expiresAt: { [Op.lte]: new Date(now) } },
+      where: { status: { [Op.in]: ['pending', 'accepted'] }, expiresAt: { [Op.lte]: new Date(now) } },
       attributes: ['id'],
       limit,
     });
@@ -158,7 +175,7 @@ const dbStore = {
   },
 
   async chatResults(chatId) {
-    const rows = await GameResult.findAll({ where: { chatId }, attributes: ['userId', 'score', 'won'] });
+    const rows = await GameResult.findAll({ where: { chatId }, attributes: ['userId', 'score', 'won', 'playerCount'] });
     return rows.map(r => r.get({ plain: true }));
   },
 

@@ -12,11 +12,13 @@ const ACHIEVEMENTS = [
 const summarize = (results, { challengesCompleted = 0, challengesWon = 0 } = {}) => {
   const byGame = new Map();
   for (const r of results) {
-    const game = byGame.get(r.gameType) || { gameType: r.gameType, gameName: r.gameName || r.gameType, played: 0, wins: 0, bestScore: 0 };
+    // Custom games share a type but not a length, so each is its own line
+    const key = `${r.gameType}:${r.gameName}`;
+    const game = byGame.get(key) || { gameType: r.gameType, gameName: r.gameName || r.gameType, played: 0, wins: 0, bestScore: 0 };
     game.played += 1;
     if (r.won) game.wins += 1;
     game.bestScore = Math.max(game.bestScore, r.score || 0);
-    byGame.set(r.gameType, game);
+    byGame.set(key, game);
   }
   const totals = {
     played: results.length,
@@ -37,7 +39,8 @@ const leaderboard = (results, members) => {
   const rows = new Map(members.map(m => [m.userId, { userId: m.userId, username: m.username, played: 0, wins: 0, bestScore: 0 }]));
   for (const r of results) {
     const row = rows.get(r.userId);
-    if (!row) continue;
+    // Group standings are games played together, not solo challenge rounds
+    if (!row || r.playerCount === 1) continue;
     row.played += 1;
     if (r.won) row.wins += 1;
     row.bestScore = Math.max(row.bestScore, r.score || 0);

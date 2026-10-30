@@ -93,6 +93,11 @@ const GameSession = sequelize.define('GameSession', {
     type: DataTypes.UUID,
     allowNull: true
   },
+  // Results and result card are written; the sweeper retries sessions without this
+  settledAt: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
   rematchOfId: {
     type: DataTypes.UUID,
     allowNull: true
@@ -110,7 +115,16 @@ const GameSession = sequelize.define('GameSession', {
 }, {
   indexes: [
     { fields: ['chatId', 'status'] },
-    { fields: ['status', 'deadline'] }
+    { fields: ['status', 'deadline'] },
+    { fields: ['status', 'settledAt', 'endedAt'] },
+    // One open game per chat, whatever two servers try at the same moment.
+    // Solo challenge rounds don't count.
+    {
+      name: 'game_sessions_one_open_per_chat',
+      unique: true,
+      fields: ['chatId'],
+      where: { status: ['lobby', 'active'], challengeId: null }
+    }
   ]
 });
 

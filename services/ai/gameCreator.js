@@ -35,6 +35,7 @@ const parseRequest = (body) => {
     // Saved with real names in it: those must not go to the provider
     if (draft.fromConversation) throw invalid('Games made from chat messages cannot be changed with AI. Create a new one instead.');
     delete draft.fromConversation;
+    delete draft.sourceChatId;
   }
 
   const hasEvidence = Array.isArray(body.evidence) && body.evidence.length > 0;

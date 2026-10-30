@@ -22,7 +22,9 @@ const MESSAGES = {
   NOT_CHALLENGEABLE: 'Only a scored game you played can be turned into a challenge.',
   CHALLENGE_CLOSED: 'This challenge is no longer open.',
   NOT_YOUR_CHALLENGE: 'This challenge is for someone else.',
-  ALREADY_PLAYED: 'You already played this game, so you know the answers.',
+  ALREADY_CHALLENGED: 'You already challenged friends with this score.',
+  ADMINS_ONLY: 'Only admins can start games in this group.',
+  GAME_WRONG_CHAT: 'This game was made from another chat\'s messages, so it can only be played there.',
   TOO_MANY_GAMES: 'You have saved the maximum number of games. Delete one to save another.',
 };
 
@@ -44,6 +46,8 @@ const STATUS = {
   SESSION_NOT_FOUND: 404,
   ACCESS_DENIED: 403,
   USER_BLOCKED: 403,
+  ADMINS_ONLY: 403,
+  GAME_WRONG_CHAT: 403,
   GAME_UNAVAILABLE: 403,
   NOT_HOST: 403,
   RATE_LIMITED: 429,

@@ -176,13 +176,17 @@ const createGame = async (req, res) => {
       // Without chat messages this is only what the user typed
       scope: input.conversation ? 'conversation' : 'drafts',
       signal: controller.signal,
-      build: (capabilities, settings) => ({
-        messages: gameCreator.buildMessages(input.evidence.length ? capEvidence(input, settings) : input),
-        json: capabilities.structuredOutput,
-        maxTokens: 6000,
-        temperature: 0.7,
-        lowReasoning: true,
-      }),
+      build: (capabilities, settings) => {
+        // Also for a change with no new messages: the draft came from a conversation
+        if (input.conversation) privacy.conversationCap(settings, 'evidence');
+        return {
+          messages: gameCreator.buildMessages(input.evidence.length ? capEvidence(input, settings) : input),
+          json: capabilities.structuredOutput,
+          maxTokens: 6000,
+          temperature: 0.7,
+          lowReasoning: true,
+        };
+      },
     });
     if (result.finishReason === 'length' && !result.text.trim()) {
       throw new AiError('BAD_RESPONSE', 'The model ran out of room before answering. Try fewer rounds.');

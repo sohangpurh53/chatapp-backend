@@ -14,14 +14,19 @@ function memoryStore() {
   const challenges = new Map();
   const leftChats = new Set();
   const boardMembers = [];
+  const settled = new Set();
   return {
     challenges,
     leftChats,
     boardMembers,
+    settled,
     sessions,
     results,
     customGames,
     async create(session) {
+      if (!session.challenge && [...sessions.values()].some(s => s.chatId === session.chatId && !s.challenge && (s.status === 'lobby' || s.status === 'active'))) {
+        throw Object.assign(new Error('unique'), { name: 'SequelizeUniqueConstraintError' });
+      }
       sessions.set(session.id, copy(session));
       return copy(session);
     },
@@ -44,6 +49,17 @@ function memoryStore() {
         .filter(s => (s.status === 'lobby' || s.status === 'active') && s.deadline && s.deadline <= now)
         .map(s => s.id);
     },
+    async markSettled(id) {
+      settled.add(id);
+    },
+    async findUnsettled(before) {
+      return [...sessions.values()]
+        .filter(s => s.status !== 'lobby' && s.status !== 'active' && !settled.has(s.id) && s.endedAt <= before)
+        .map(copy);
+    },
+    async hasChallengeFrom(sourceSessionId, challengerId) {
+      return [...challenges.values()].some(c => c.sourceSessionId === sourceSessionId && c.challengerId === challengerId);
+    },
     async createChallenge(values) {
       challenges.set(values.id, copy(values));
       return copy(values);
@@ -62,7 +78,7 @@ function memoryStore() {
       return copy(challenges.get(id));
     },
     async findExpiredChallengeIds(now) {
-      return [...challenges.values()].filter(c => c.status === 'pending' && new Date(c.expiresAt).getTime() <= now).map(c => c.id);
+      return [...challenges.values()].filter(c => ['pending', 'accepted'].includes(c.status) && new Date(c.expiresAt).getTime() <= now).map(c => c.id);
     },
     async userResults(userId) {
       return results.filter(r => r.userId === userId).reverse().map(copy);
@@ -149,6 +165,10 @@ function installChatWorld({ chats, blocks = [] }) {
     return chats.filter(c => c.members.includes(userId)).map(c => ({ id: c.id }));
   });
   stub(Chat, 'update', async () => [1]);
+  stub(Chat, 'findOne', async ({ where }) => {
+    const pairs = where[Object.getOwnPropertySymbols(where)[0]];
+    return chats.find(c => !c.isGroup && pairs.some(p => p.participant1Id === c.participant1Id && p.participant2Id === c.participant2Id)) || null;
+  });
   stub(User, 'findByPk', async (id) => ({ id, username: id, avatar: null }));
   stub(UserBlock, 'findAll', async ({ where }) => {
     const pairs = where[Object.getOwnPropertySymbols(where)[0]] || [];

@@ -14,6 +14,7 @@ const blockUser = async (req, res) => {
     }
 
     await UserBlock.findOrCreate({ where: { blockerId, blockedId }, defaults: { blockerId, blockedId } });
+    require('../services/games').pairBlocked(blockerId, blockedId).catch(error => console.error('Game update failed:', error.message));
     res.json({ success: true, blocked: true });
   } catch (error) {
     console.error('Block user error:', error);

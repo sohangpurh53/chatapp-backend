@@ -327,7 +327,13 @@ const applyAction = (session, action, now, rng = Math.random) => {
     }
 
     case 'cancel': {
+      if (action.system) {
+        finish(next, 'cancelled', 'unavailable', now);
+        break;
+      }
       if (userId !== next.hostId) throw new GameError('NOT_HOST');
+      // Once it's running, cancelling would let a losing host erase the result
+      if (next.status !== 'lobby') throw new GameError('ALREADY_STARTED');
       finish(next, 'cancelled', 'host_cancelled', now);
       break;
     }

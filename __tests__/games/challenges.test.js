@@ -187,7 +187,7 @@ describe('challenges', () => {
     assert.equal(store.challenges.get(challenge.challengeId).status, 'expired');
   });
 
-  test("a custom game's challenge can't be taken by someone who played it", async () => {
+  test('custom games and solo rounds cannot become challenges', async () => {
     const { game } = await games.saveCustomGame('alice', {
       title: 'Quiz', format: 'quiz', rounds: [1, 2, 3].map(i => ({ question: `Q${i}`, options: ['a', 'b'], answer: 0 })),
     });
@@ -202,10 +202,105 @@ describe('challenges', () => {
       }
       await advanceAll(session.id);
     }
+    await assert.rejects(games.createChallenge('alice', { sessionId: session.id }), { code: 'NOT_CHALLENGEABLE' });
+
     games.lastCreateAt.clear();
-    const { challenge } = await games.createChallenge('alice', { sessionId: session.id });
-    await assert.rejects(games.acceptChallenge('bob', { challengeId: challenge.challengeId }), { code: 'ALREADY_PLAYED' });
-    assert.equal((await games.acceptChallenge('cara', { challengeId: challenge.challengeId })).session.gameName, 'Quiz');
+    const { challenge } = await games.createChallenge('alice', { sessionId: await finishedGame(GROUP) });
+    const solo = await games.acceptChallenge('cara', { challengeId: challenge.challengeId });
+    await playSolo('cara', solo.session.id, true);
+    await assert.rejects(games.createChallenge('cara', { sessionId: solo.session.id }), { code: 'NOT_CHALLENGEABLE' });
+  });
+
+  test('one challenge per game result, even after the last one closes', async () => {
+    const id = await finishedGame(GROUP);
+    const { challenge } = await games.createChallenge('alice', { sessionId: id });
+    await games.expireChallenge(challenge.challengeId);
+    games.lastCreateAt.clear();
+    await assert.rejects(games.createChallenge('alice', { sessionId: id }), { code: 'ALREADY_CHALLENGED' });
+  });
+
+  test('a solo round in progress is hidden from everyone else', async () => {
+    const { challenge } = await games.createChallenge('alice', { sessionId: await finishedGame(GROUP) });
+    const { session } = await games.acceptChallenge('cara', { challengeId: challenge.challengeId });
+    await assert.rejects(games.get('bob', session.id), { code: 'SESSION_NOT_FOUND' });
+    assert.equal((await games.get('cara', session.id)).session.id, session.id);
+  });
+
+  test('an accepted challenge that never finishes lapses instead of sticking', async () => {
+    const { challenge } = await games.createChallenge('alice', { sessionId: await finishedGame(GROUP) });
+    await games.acceptChallenge('cara', { challengeId: challenge.challengeId });
+    clock += 31 * 60 * 1000;
+    assert.deepEqual(await store.findExpiredChallengeIds(clock), [challenge.challengeId]);
+    await games.expireChallenge(challenge.challengeId);
+    assert.equal(store.challenges.get(challenge.challengeId).status, 'expired');
+  });
+});
+
+describe('recovery and chat rules', () => {
+  test('a game that ended without its follow-up is finished by the sweeper, once', async () => {
+    const id = await finishedGame(DIRECT);
+    // As if the server died right after the game ended
+    store.results.length = 0;
+    store.settled.delete(id);
+    const session = store.sessions.get(id);
+    world.messages.delete(session.resultMessageId);
+    clock += 60 * 1000;
+    games.startSweeper(5);
+    const started = Date.now();
+    while (!store.settled.has(id) && Date.now() - started < 1000) await new Promise(r => setTimeout(r, 5));
+    games.stop();
+    assert.equal(store.results.length, 2);
+    assert.ok(world.messages.has(session.resultMessageId));
+    const cards = emitted.filter(e => e.event === 'new_message' && e.payload.encryptionMetadata?.game?.kind === 'result');
+    assert.equal(cards.length, 2, 'one from the game, one from the recovery after it was lost');
+  });
+
+  test('a second game racing the first ends up joining it', async () => {
+    const [a, b] = await Promise.all([
+      games.create('alice', { chatId: GROUP, gameType: 'quick_trivia' }),
+      games.create('bob', { chatId: GROUP, gameType: 'quick_trivia' }),
+    ]);
+    assert.equal(a.session.id, b.session.id);
+    assert.equal(store.sessions.size, 1);
+  });
+
+  test('announcement-only groups and slow mode apply to game cards', async () => {
+    const chat = chats.find(c => c.id === GROUP);
+    chat.settings = { onlyAdminsCanSend: true };
+    await assert.rejects(games.create('alice', { chatId: GROUP, gameType: 'quick_trivia' }), { code: 'ADMINS_ONLY' });
+    chat.settings = { slowModeSeconds: 60 };
+    const { session } = await games.create('alice', { chatId: GROUP, gameType: 'quick_trivia' });
+    await games.act('alice', session.id, { type: 'cancel' });
+    clock += 30 * 1000;
+    await assert.rejects(games.create('alice', { chatId: GROUP, gameType: 'quick_trivia' }), { code: 'RATE_LIMITED' });
+    delete chat.settings;
+  });
+
+  test('a removed member stops holding the game up, and a removed host hands it on', async () => {
+    const { session } = await games.create('alice', { chatId: GROUP, gameType: 'quick_trivia' });
+    await games.act('bob', session.id, { type: 'join' });
+    await games.memberLeft(GROUP, 'alice');
+    const s = store.sessions.get(session.id);
+    assert.equal(s.hostId, 'bob');
+    assert.equal(s.players.find(p => p.userId === 'alice').status, 'left');
+  });
+
+  test('blocking ends the pair\'s open game and waiting challenge', async () => {
+    const { challenge } = await games.createChallenge('alice', { sessionId: await finishedGame(DIRECT) });
+    games.lastCreateAt.clear();
+    const { session } = await games.create('alice', { chatId: DIRECT, gameType: 'quick_trivia' });
+    await games.pairBlocked('bob', 'alice');
+    assert.equal(store.sessions.get(session.id).status, 'cancelled');
+    assert.equal(store.challenges.get(challenge.challengeId).status, 'expired');
+  });
+
+  test('a game made from a chat only plays in that chat', async () => {
+    const { game } = await games.saveCustomGame('alice', {
+      title: 'Ours', format: 'quiz', fromConversation: true, sourceChatId: GROUP,
+      rounds: [1, 2, 3].map(i => ({ question: `Q${i}`, options: ['a', 'b'], answer: 0 })),
+    });
+    await assert.rejects(games.create('alice', { chatId: DIRECT, customGameId: game.id }), { code: 'GAME_WRONG_CHAT' });
+    assert.ok(await games.create('alice', { chatId: GROUP, customGameId: game.id }));
   });
 });
 
@@ -243,6 +338,7 @@ describe('stats', () => {
     assert.equal(summarize(results).games[0].bestScore, 9);
     const rows = leaderboard(results, [{ userId: 'y', username: 'y' }, { userId: 'x', username: 'x' }, { userId: 'z', username: 'z' }]);
     assert.deepEqual(rows.map(r => r.userId), ['x', 'y']);
+    assert.deepEqual(leaderboard([{ userId: 'x', score: 9, won: true, playerCount: 1 }], [{ userId: 'x', username: 'x' }]), []);
   });
 });
 

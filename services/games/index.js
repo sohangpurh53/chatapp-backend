@@ -5,6 +5,7 @@
 // engine.viewFor) to the chat_<id> room, and the invite card is kept current
 // with 'game_card_updated'. Apps that were away fetch the session again
 // (GET /api/games/sessions/:id), so nothing depends on a missed event.
+const { Op } = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
 const { Chat, User, Message, ChatParticipant } = require('../../models');
 const redisService = require('../../config/redis');
@@ -22,6 +23,10 @@ const SWEEP_INTERVAL_MS = 15000;
 // However often a chat starts games, one person gets one push about them per window
 const INVITE_PUSH_WINDOW_SECONDS = 30 * 60;
 const CHALLENGE_TTL_MS = 24 * 60 * 60 * 1000;
+// Longer than the longest possible solo round
+const CHALLENGE_PLAY_MS = 30 * 60 * 1000;
+// How long the server ending a game has to finish up before the sweeper steps in
+const SETTLE_GRACE_MS = 30 * 1000;
 // Fires a moment after the deadline so the session is due when the timer runs
 const TIMER_SLACK_MS = 25;
 
@@ -100,16 +105,33 @@ class GameService {
     if (peerId) {
       const { blockedByMe, blockedByThem } = await blockState(userId, peerId);
       if (blockedByMe) throw new GameError('USER_BLOCKED');
-      // Not told apart from any other reason: the blocked person isn't told
+      // The only way to get this code, unlike send_message, which pretends to work
       if (blockedByThem) throw new GameError('GAME_UNAVAILABLE');
     }
-    return { chat, peerId };
+    return { chat, peerId, participant };
+  }
+
+  /**
+   * Posting a game card follows the chat's rules for posting: announcement-only
+   * groups and slow mode (admins are exempt), and a short cooldown for everyone.
+   */
+  claimPost(userId, chat, participant, now) {
+    const settings = chat.settings || {};
+    const isAdmin = participant.role === 'admin' || participant.role === 'moderator';
+    if (chat.isGroup && !isAdmin && settings.onlyAdminsCanSend) throw new GameError('ADMINS_ONLY');
+    const slowMs = chat.isGroup && !isAdmin ? (Number(settings.slowModeSeconds) || 0) * 1000 : 0;
+    if (now - (this.lastCreateAt.get(userId) || 0) < Math.max(CREATE_COOLDOWN_MS, slowMs)) throw new GameError('RATE_LIMITED');
+    this.lastCreateAt.set(userId, now);
   }
 
   async loadAuthorized(userId, sessionId) {
     if (!isUuid(sessionId)) throw new GameError('INVALID_REQUEST');
     const session = await this.store.get(sessionId);
     if (!session) throw new GameError('SESSION_NOT_FOUND');
+    // A solo round in progress is only its player's business
+    if (session.challenge && engine.isOpen(session) && !session.players.some(p => p.userId === userId)) {
+      throw new GameError('SESSION_NOT_FOUND');
+    }
     // A member of another chat gets the same answer as for a session that doesn't exist
     try {
       await this.authorize(userId, session.chatId);
@@ -134,13 +156,15 @@ class GameService {
       if (!isUuid(customGameId)) throw new GameError('INVALID_REQUEST');
       const saved = await this.store.getCustomGame(customGameId, userId);
       if (!saved) throw new GameError('GAME_NOT_FOUND');
+      // It can hold names and text from the chat it was made from
+      if (saved.sourceChatId && saved.sourceChatId !== chatId) throw new GameError('GAME_WRONG_CHAT');
       gameType = FORMATS[saved.format];
       customContent = toSessionContent(saved);
     } else if (getGame(gameType)?.custom && !rematchOf) {
       throw new GameError('UNKNOWN_GAME');
     }
     if (typeof gameType !== 'string' || !isAvailable(gameType)) throw new GameError('UNKNOWN_GAME');
-    const { chat, peerId } = await this.authorize(userId, chatId);
+    const { chat, peerId, participant } = await this.authorize(userId, chatId);
 
     const open = await this.store.findOpen(chatId);
     if (open) {
@@ -151,8 +175,7 @@ class GameService {
     }
 
     const now = this.now();
-    if (now - (this.lastCreateAt.get(userId) || 0) < CREATE_COOLDOWN_MS) throw new GameError('RATE_LIMITED');
-    this.lastCreateAt.set(userId, now);
+    this.claimPost(userId, chat, participant, now);
 
     const host = await User.findByPk(userId, { attributes: ['id', 'username', 'avatar'] });
     if (!host) throw new GameError('ACCESS_DENIED');
@@ -186,8 +209,17 @@ class GameService {
     session.cardMessageId = uuidv4();
     session.resultMessageId = uuidv4();
 
-    const saved = await this.store.create(session);
-    await this.postCard(saved, 'invite');
+    let saved;
+    try {
+      saved = await this.store.create(session);
+    } catch (error) {
+      // Someone else's game got in first (the database allows one per chat)
+      if (error.name !== 'SequelizeUniqueConstraintError') throw error;
+      const winner = await this.store.findOpen(chatId);
+      if (!winner) throw error;
+      return { session: engine.viewFor(winner, userId, this.now()), existing: true };
+    }
+    await this.postCard(saved, 'invite').catch(error => console.error('Failed to post game invite card:', error.message));
     this.schedule(saved);
     // Never holds up the game: the invite card is already in the chat
     this.pushInvites(saved, chat, invitees.map(u => u.id), !!(previous || peerId))
@@ -261,17 +293,19 @@ class GameService {
     const session = await this.loadAuthorized(userId, sessionId);
     const rules = engine.rulesOf(session);
     const player = session.players.find(p => p.userId === userId);
-    if (session.status !== 'completed' || !rules?.scored) throw new GameError('NOT_CHALLENGEABLE');
+    // Not custom games: their fixed rounds are visible to the chat after a game.
+    // Not solo rounds: challenges would chain from one person's score.
+    if (session.status !== 'completed' || !rules?.scored || session.content || session.challenge) throw new GameError('NOT_CHALLENGEABLE');
     if (!player?.playing || player.score <= 0) throw new GameError('NOT_CHALLENGEABLE');
 
     const waiting = await this.store.findPendingChallenge(session.chatId, userId);
     if (waiting) return { challenge: this.challengeCard(waiting), existing: true };
+    // One challenge per game result, so one good score can't be replayed for stats
+    if (await this.store.hasChallengeFrom(session.id, userId)) throw new GameError('ALREADY_CHALLENGED');
 
     const now = this.now();
-    if (now - (this.lastCreateAt.get(userId) || 0) < CREATE_COOLDOWN_MS) throw new GameError('RATE_LIMITED');
-    this.lastCreateAt.set(userId, now);
-
-    const { peerId } = await this.authorize(userId, session.chatId);
+    const { chat, peerId, participant } = await this.authorize(userId, session.chatId);
+    this.claimPost(userId, chat, participant, now);
     const challenge = await this.store.createChallenge({
       id: uuidv4(),
       chatId: session.chatId,
@@ -294,17 +328,14 @@ class GameService {
   async acceptChallenge(userId, { challengeId } = {}) {
     const found = await this.loadChallenge(userId, challengeId);
     if (found.challengerId === userId || (found.targetUserId && found.targetUserId !== userId)) throw new GameError('NOT_YOUR_CHALLENGE');
-    const source = await this.store.get(found.sourceSessionId);
-    if (!source) throw new GameError('CHALLENGE_CLOSED');
-    // A custom game replays its own rounds: anyone who played it knows the answers
-    if (source.content && source.players.some(p => p.userId === userId && p.playing)) throw new GameError('ALREADY_PLAYED');
     const host = await User.findByPk(userId, { attributes: ['id', 'username', 'avatar'] });
     if (!host) throw new GameError('ACCESS_DENIED');
 
     const sessionId = uuidv4();
     const challenge = await this.store.updateChallenge(found.id, (current) => {
       if (current.status !== 'pending' || new Date(current.expiresAt).getTime() <= this.now()) throw new GameError('CHALLENGE_CLOSED');
-      return { status: 'accepted', takerId: userId, takerName: host.username, sessionId };
+      // From here the clock is for playing: a round that never starts or ends lapses
+      return { status: 'accepted', takerId: userId, takerName: host.username, sessionId, expiresAt: new Date(this.now() + CHALLENGE_PLAY_MS) };
     });
 
     const now = this.now();
@@ -314,7 +345,6 @@ class GameService {
       gameType: found.gameType,
       host: userSummary(host),
       now,
-      content: source.content,
       challenge: { id: found.id, targetScore: found.targetScore, challengerName: found.challengerName },
     });
     const session = await this.store.create(engine.applyAction(created, { type: 'start', userId }, now, this.rng));
@@ -354,16 +384,17 @@ class GameService {
   async finishChallenge(session) {
     const player = session.players[0];
     if (session.status === 'completed') await this.recordResults(session);
-    const challenge = await this.store.updateChallenge(session.challenge.id, () => (
-      session.status === 'completed'
+    const challenge = await this.store.updateChallenge(session.challenge.id, (current) => {
+      if (current.status !== 'accepted') return null;
+      return session.status === 'completed'
         ? { status: 'completed', score: player.score, beat: player.score > session.challenge.targetScore }
-        : { status: 'expired' }
-    ));
+        : { status: 'expired' };
+    });
     if (challenge) await this.updateChallengeCard(challenge);
   }
 
   async expireChallenge(id) {
-    const challenge = await this.store.updateChallenge(id, (current) => (current.status === 'pending' ? { status: 'expired' } : null));
+    const challenge = await this.store.updateChallenge(id, (current) => (['pending', 'accepted'].includes(current.status) ? { status: 'expired' } : null));
     if (challenge?.status === 'expired') await this.updateChallengeCard(challenge);
   }
 
@@ -454,6 +485,46 @@ class GameService {
     return { leaderboard: stats.leaderboard(results, members) };
   }
 
+  // ---------- membership changes ----------
+
+  /** Someone left or was removed: they stop counting in the chat's open game. */
+  async memberLeft(chatId, userId) {
+    const open = await this.store.findOpen(chatId);
+    if (!open?.players.some(p => p.userId === userId && p.status === 'joined')) return;
+    const result = await this.exclusive(open.id, () => this.store.update(open.id, (current) => {
+      const now = this.now();
+      return engine.applyAction(engine.advance(current, now), { type: 'leave', userId }, now, this.rng);
+    }));
+    if (result) await this.afterChange(result.before, result.after);
+  }
+
+  /** A block ends what the pair had going in their 1:1 chat. */
+  async pairBlocked(userA, userB) {
+    const chat = await Chat.findOne({
+      where: {
+        isGroup: false,
+        [Op.or]: [
+          { participant1Id: userA, participant2Id: userB },
+          { participant1Id: userB, participant2Id: userA },
+        ],
+      },
+      attributes: ['id'],
+    });
+    if (!chat) return;
+    for (const id of [userA, userB]) {
+      const waiting = await this.store.findPendingChallenge(chat.id, id);
+      if (waiting) await this.expireChallenge(waiting.id);
+    }
+    const open = await this.store.findOpen(chat.id);
+    if (!open) return;
+    const result = await this.exclusive(open.id, () => this.store.update(open.id, (current) => (
+      engine.isOpen(current)
+        ? engine.applyAction(current, { type: 'cancel', userId: current.hostId, system: true }, this.now(), this.rng)
+        : current
+    )));
+    if (result) await this.afterChange(result.before, result.after);
+  }
+
   // ---------- clock ----------
 
   /** Moves the session on if its deadline has passed. Resolves to the session. */
@@ -490,6 +561,12 @@ class GameService {
         for (const id of due) await this.tick(id);
         const expired = await this.store.findExpiredChallengeIds(this.now());
         for (const id of expired) await this.expireChallenge(id);
+        // Finished, but the server handling it never completed the follow-up
+        const unsettled = await this.store.findUnsettled(this.now() - SETTLE_GRACE_MS);
+        for (const session of unsettled) {
+          if (!session.challenge) await this.updateCard(session, engine.cardFor(session, 'invite'));
+          await this.settle(session);
+        }
       } catch (error) {
         console.error('Game sweep failed:', error.message);
       }
@@ -525,7 +602,7 @@ class GameService {
     if (after.challenge) {
       const view = engine.viewFor(after, null, this.now());
       for (const player of after.players) this.emitToUser(player.userId, 'game_state', view);
-      if (engine.isOpen(before) && !engine.isOpen(after)) await this.finishChallenge(after);
+      if (engine.isOpen(before) && !engine.isOpen(after)) await this.settle(after);
       return;
     }
     this.emitToChat(after.chatId, 'game_state', engine.viewFor(after, null, this.now()));
@@ -534,40 +611,51 @@ class GameService {
     if (JSON.stringify(card) !== JSON.stringify(engine.cardFor(before, 'invite'))) {
       await this.updateCard(after, card);
     }
-    if (after.status === 'completed' && before.status !== 'completed') {
-      await this.recordResults(after);
-      await this.postCard(after, 'result');
+    if (engine.isOpen(before) && !engine.isOpen(after)) await this.settle(after);
+  }
+
+  /**
+   * What a finished session leaves behind. Safe to repeat: results and cards can't
+   * be written twice. The sweeper retries any session not marked settled, so a
+   * crash or a failed write right after a game ends loses nothing.
+   */
+  async settle(session) {
+    try {
+      if (session.challenge) {
+        await this.finishChallenge(session);
+      } else if (session.status === 'completed') {
+        await this.recordResults(session);
+        await this.postCard(session, 'result');
+      }
+      await this.store.markSettled(session.id);
+    } catch (error) {
+      console.error('Settling game failed, will retry:', error.message);
     }
   }
 
   /** Creates the session's invite or result card in the chat (once). */
   async postCard(session, kind) {
     const id = kind === 'result' ? session.resultMessageId : session.cardMessageId;
-    try {
-      const card = engine.cardFor(session, kind);
-      const [message, created] = await Message.findOrCreate({
-        where: { id },
-        defaults: {
-          id,
-          chatId: session.chatId,
-          senderId: session.createdBy,
-          content: cardText(card),
-          messageType: 'game',
-          isEncrypted: false,
-          status: 'sent',
-          encryptionMetadata: { game: card },
-        },
-      });
-      if (!created) return;
-      await Chat.update({ lastActivityAt: new Date() }, { where: { id: session.chatId } });
-      const complete = await Message.findByPk(message.id, {
-        include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'avatar'] }],
-      });
-      this.emitToChat(session.chatId, 'new_message', complete ? complete.toJSON() : message.toJSON());
-    } catch (error) {
-      // A missing card must not fail the game itself
-      console.error(`Failed to post game ${kind} card:`, error.message);
-    }
+    const card = engine.cardFor(session, kind);
+    const [message, created] = await Message.findOrCreate({
+      where: { id },
+      defaults: {
+        id,
+        chatId: session.chatId,
+        senderId: session.createdBy,
+        content: cardText(card),
+        messageType: 'game',
+        isEncrypted: false,
+        status: 'sent',
+        encryptionMetadata: { game: card },
+      },
+    });
+    if (!created) return;
+    await Chat.update({ lastActivityAt: new Date() }, { where: { id: session.chatId } });
+    const complete = await Message.findByPk(message.id, {
+      include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'avatar'] }],
+    });
+    this.emitToChat(session.chatId, 'new_message', complete ? complete.toJSON() : message.toJSON());
   }
 
   async updateCard(session, card) {
@@ -576,7 +664,10 @@ class GameService {
         { content: cardText(card), encryptionMetadata: { game: card } },
         { where: { id: session.cardMessageId, chatId: session.chatId } },
       );
-      this.emitToChat(session.chatId, 'game_card_updated', { chatId: session.chatId, messageId: session.cardMessageId, game: card });
+      // Updates can arrive out of order: apps keep the highest version
+      this.emitToChat(session.chatId, 'game_card_updated', {
+        chatId: session.chatId, messageId: session.cardMessageId, game: { ...card, version: session.version },
+      });
     } catch (error) {
       console.error('Failed to update game card:', error.message);
     }
@@ -585,8 +676,7 @@ class GameService {
   async recordResults(session) {
     const playing = session.players.filter(p => p.playing);
     const winners = new Set(engine.winnerIds(session));
-    try {
-      await this.store.saveResults(playing.map(p => ({
+    await this.store.saveResults(playing.map(p => ({
         sessionId: session.id,
         chatId: session.chatId,
         userId: p.userId,
@@ -598,10 +688,7 @@ class GameService {
         left: p.status === 'left',
         playerCount: playing.length,
         completedAt: session.endedAt,
-      })));
-    } catch (error) {
-      console.error('Failed to record game results:', error.message);
-    }
+    })));
   }
 
   emitToChat(chatId, event, payload) {

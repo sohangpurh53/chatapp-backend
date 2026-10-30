@@ -250,8 +250,15 @@ class SocketHandlers {
     }
   }
 
-  handleJoinChat(socket, data) {
-    const { chatId } = data;
+  async handleJoinChat(socket, data) {
+    const chatId = data?.chatId;
+    if (!isUuid(chatId)) return;
+    // The room carries live messages and game state: members only
+    const member = await ChatParticipant.findOne({
+      where: { userId: socket.userId, chatId, isActive: true },
+      attributes: ['id']
+    }).catch(() => null);
+    if (!member) return;
     socket.join(`chat_${chatId}`);
 
     // Notify others that user joined
@@ -305,6 +312,12 @@ class SocketHandlers {
         hasEncryptedContent: !!encryptedContent,
         keyId: keyId ? keyId.substring(0, 20) + '...' : null
       });
+
+      // Game cards only ever come from the server (services/games)
+      if (messageType === 'game') {
+        fail({ message: 'Invalid message type', code: 'INVALID_MESSAGE_TYPE', chatId });
+        return;
+      }
 
       // A message the app sends again (it never heard back, or restarted) is
       // acknowledged with the stored copy instead of being stored twice. Checked

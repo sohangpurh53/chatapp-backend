@@ -38,6 +38,11 @@ const CustomGame = sequelize.define('CustomGame', {
     allowNull: false,
     defaultValue: false
   },
+  // The chat it was made from: a game holding chat text is only playable there
+  sourceChatId: {
+    type: DataTypes.UUID,
+    allowNull: true
+  },
   roundSeconds: {
     type: DataTypes.INTEGER,
     allowNull: false

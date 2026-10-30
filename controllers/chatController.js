@@ -1245,6 +1245,7 @@ const deleteChat = async (req, res) => {
       // ✅ For direct chats, mark current user's participant as inactive
       await participant.update({ isActive: false });
       console.log(`🗑️ User ${userId} marked as inactive in chat ${chatId}`);
+      require('../services/games').memberLeft(chatId, userId).catch(error => console.error('Game update failed:', error.message));
 
       // ✅ NEW: Mark all messages in this chat as deleted for this user
       const messages = await Message.findAll({
@@ -1338,6 +1339,7 @@ const leaveGroup = async (req, res) => {
 
     // Mark participant as inactive
     await participant.update({ isActive: false, leftAt: new Date() });
+    require('../services/games').memberLeft(chatId, userId).catch(error => console.error('Game update failed:', error.message));
 
     // They keep what they already read, but must not be able to read what comes
     // next: drop their key copies and have the remaining members rotate the key

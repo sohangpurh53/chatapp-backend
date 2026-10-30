@@ -175,9 +175,10 @@ describe('rounds', () => {
     assert.equal(s.endReason, 'everyone_left');
   });
 
-  test('the host can cancel a running game, nobody else can', () => {
+  test("nobody can cancel a running game to erase a result, but the server can", () => {
     assert.throws(() => act(started(), 'cancel', 'bob', 4000), { code: 'NOT_HOST' });
-    const s = act(started(), 'cancel', 'alice', 4000);
+    assert.throws(() => act(started(), 'cancel', 'alice', 4000), { code: 'ALREADY_STARTED' });
+    const s = act(started(), 'cancel', 'alice', 4000, { system: true });
     assert.equal(s.status, 'cancelled');
     assert.throws(() => act(s, 'answer', 'bob', 4001, { round: 0, choice: 0 }), { code: 'SESSION_CLOSED' });
   });

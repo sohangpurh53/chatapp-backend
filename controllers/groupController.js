@@ -218,6 +218,7 @@ const removeMember = async (req, res) => {
     }
 
     await target.update({ isActive: false, leftAt: new Date(), role: 'member' });
+    require('../services/games').memberLeft(chatId, target.userId).catch(error => console.error('Game update failed:', error.message));
     // Without a key row the removed user can no longer fetch the group key, and
     // the next member to send rotates it, so they can't read new messages with
     // the key they already had.

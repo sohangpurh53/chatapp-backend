@@ -191,7 +191,7 @@ describe('a group game', () => {
     const { session } = await call(alice, 'game_create', { chatId: GROUP, gameType: 'quick_trivia' });
     await call(bob, 'game_join', { sessionId: session.id });
     await call(alice, 'game_start', { sessionId: session.id });
-    await call(alice, 'game_cancel', { sessionId: session.id });
+    await games.act('alice', session.id, { type: 'cancel', system: true });
 
     games.lastCreateAt.clear();
     const rematch = await call(bob, 'game_create', { chatId: GROUP, gameType: 'quick_trivia', rematchOf: session.id });
@@ -290,7 +290,7 @@ describe('invite pushes', () => {
     const { session } = await call(alice, 'game_create', { chatId: GROUP, gameType: 'quick_trivia' });
     await call(bob, 'game_join', { sessionId: session.id });
     await call(alice, 'game_start', { sessionId: session.id });
-    await call(alice, 'game_cancel', { sessionId: session.id });
+    await games.act('alice', session.id, { type: 'cancel', system: true });
     world.claims.clear();
     gameInvites.length = 0;
     world.online.clear();
@@ -299,6 +299,28 @@ describe('invite pushes', () => {
     await call(alice, 'game_create', { chatId: GROUP, gameType: 'quick_trivia', rematchOf: session.id });
     await until(() => gameInvites.length > 0, { label: 'rematch push' });
     assert.deepEqual(pushedTo(), ['bob']);
+  });
+});
+
+describe('rooms and forged cards', () => {
+  test('join_chat only lets members into a chat room', async () => {
+    const dave = await server.phone('dave');
+    const alice = await server.phone('alice');
+    dave.emit('join_chat', { chatId: GROUP });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    dave.clear();
+    await call(alice, 'game_create', { chatId: GROUP, gameType: 'quick_trivia' });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepEqual(dave.names(), []);
+  });
+
+  test('apps cannot send game cards', async () => {
+    const alice = await server.phone('alice');
+    const ack = await call(alice, 'send_message', {
+      chatId: GROUP, messageType: 'game', content: 'x', encryptionMetadata: { game: { sessionId: 'x' } },
+    });
+    assert.equal(ack.code, 'INVALID_MESSAGE_TYPE');
+    assert.equal(world.messages.size, 0);
   });
 });
 

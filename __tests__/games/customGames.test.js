@@ -231,6 +231,12 @@ describe('POST /ai/games', () => {
     assert.equal(calls.length, 1);
   });
 
+  test('with chat context turned off, a draft from a conversation is not sent', async () => {
+    runner.runFeature = async ({ build }) => build({}, { contextLevel: 'off' });
+    const { body } = await post({ instruction: 'Harder', draft: quiz(), fromConversation: true, chatId: CHAT });
+    assert.equal(body.code, 'CONTEXT_DISABLED');
+  });
+
   test("a group that turned AI off can't be used as a source", async () => {
     Chat.findByPk = async () => ({ id: CHAT, isGroup: true, settings: { allowAiOnMessages: false } });
     const { body } = await post({ instruction: 'A quiz about this', chatId: CHAT, evidence });
