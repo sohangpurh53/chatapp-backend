@@ -11,7 +11,13 @@ function memoryStore() {
   const sessions = new Map();
   const results = [];
   const customGames = new Map();
+  const challenges = new Map();
+  const leftChats = new Set();
+  const boardMembers = [];
   return {
+    challenges,
+    leftChats,
+    boardMembers,
     sessions,
     results,
     customGames,
@@ -23,7 +29,7 @@ function memoryStore() {
       return sessions.has(id) ? copy(sessions.get(id)) : null;
     },
     async findOpen(chatId) {
-      const open = [...sessions.values()].filter(s => s.chatId === chatId && (s.status === 'lobby' || s.status === 'active'));
+      const open = [...sessions.values()].filter(s => s.chatId === chatId && !s.challenge && (s.status === 'lobby' || s.status === 'active'));
       return open.length ? copy(open[open.length - 1]) : null;
     },
     async update(id, change) {
@@ -37,6 +43,42 @@ function memoryStore() {
       return [...sessions.values()]
         .filter(s => (s.status === 'lobby' || s.status === 'active') && s.deadline && s.deadline <= now)
         .map(s => s.id);
+    },
+    async createChallenge(values) {
+      challenges.set(values.id, copy(values));
+      return copy(values);
+    },
+    async getChallenge(id) {
+      return challenges.has(id) ? copy(challenges.get(id)) : null;
+    },
+    async findPendingChallenge(chatId, challengerId) {
+      const found = [...challenges.values()].find(c => c.chatId === chatId && c.challengerId === challengerId && c.status === 'pending');
+      return found ? copy(found) : null;
+    },
+    async updateChallenge(id, change) {
+      if (!challenges.has(id)) return null;
+      const values = await change(copy(challenges.get(id)));
+      if (values) challenges.set(id, { ...challenges.get(id), ...values });
+      return copy(challenges.get(id));
+    },
+    async findExpiredChallengeIds(now) {
+      return [...challenges.values()].filter(c => c.status === 'pending' && new Date(c.expiresAt).getTime() <= now).map(c => c.id);
+    },
+    async userResults(userId) {
+      return results.filter(r => r.userId === userId).reverse().map(copy);
+    },
+    async chatResults(chatId) {
+      return results.filter(r => r.chatId === chatId).map(copy);
+    },
+    async challengeCounts(userId) {
+      const done = [...challenges.values()].filter(c => c.takerId === userId && c.status === 'completed');
+      return { challengesCompleted: done.length, challengesWon: done.filter(c => c.beat).length };
+    },
+    async chatLabels(userId, chatIds) {
+      return Object.fromEntries(chatIds.filter(id => !leftChats.has(id)).map(id => [id, `Chat ${id.slice(0, 4)}`]));
+    },
+    async leaderboardMembers() {
+      return [...boardMembers];
     },
     async getCustomGame(id, userId) {
       const game = customGames.get(id);
@@ -125,6 +167,10 @@ function installChatWorld({ chats, blocks = [] }) {
     if (messages.has(where.id)) return [row(messages.get(where.id)), false];
     messages.set(where.id, { ...defaults, createdAt: new Date() });
     return [row(messages.get(where.id)), true];
+  });
+  stub(Message, 'create', async (values) => {
+    messages.set(values.id, { ...values, createdAt: new Date() });
+    return row(messages.get(values.id));
   });
   stub(Message, 'findByPk', async (id) => (messages.has(id) ? row(messages.get(id)) : null));
   stub(Message, 'update', async (values, { where }) => {

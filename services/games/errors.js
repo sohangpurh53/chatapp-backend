@@ -19,6 +19,10 @@ const MESSAGES = {
   RATE_LIMITED: 'Slow down a little and try again.',
   INVALID_GAME: 'This game needs a title and at least 3 complete rounds.',
   GAME_NOT_FOUND: 'That saved game no longer exists.',
+  NOT_CHALLENGEABLE: 'Only a scored game you played can be turned into a challenge.',
+  CHALLENGE_CLOSED: 'This challenge is no longer open.',
+  NOT_YOUR_CHALLENGE: 'This challenge is for someone else.',
+  ALREADY_PLAYED: 'You already played this game, so you know the answers.',
   TOO_MANY_GAMES: 'You have saved the maximum number of games. Delete one to save another.',
 };
 

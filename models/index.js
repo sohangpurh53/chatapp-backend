@@ -21,6 +21,7 @@ const UserBlock = require('./UserBlock');
 const GameSession = require('./GameSession');
 const GameResult = require('./GameResult');
 const CustomGame = require('./CustomGame');
+const GameChallenge = require('./GameChallenge');
 
 // User associations
 User.hasMany(Message, { foreignKey: 'senderId', as: 'sentMessages' });
@@ -136,6 +137,7 @@ GameSession.belongsTo(Chat, { foreignKey: 'chatId', as: 'chat' });
 GameSession.hasMany(GameResult, { foreignKey: 'sessionId', as: 'results', onDelete: 'CASCADE' });
 GameResult.belongsTo(GameSession, { foreignKey: 'sessionId', as: 'session' });
 User.hasMany(GameResult, { foreignKey: 'userId', as: 'gameResults', onDelete: 'CASCADE' });
+Chat.hasMany(GameChallenge, { foreignKey: 'chatId', as: 'gameChallenges', onDelete: 'CASCADE' });
 User.hasMany(CustomGame, { foreignKey: 'userId', as: 'customGames', onDelete: 'CASCADE' });
 
 module.exports = {
@@ -143,6 +145,7 @@ module.exports = {
   GameSession,
   GameResult,
   CustomGame,
+  GameChallenge,
   UserBlock,
   User,
   Chat,

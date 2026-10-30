@@ -30,4 +30,8 @@ const updateCustomGame = handle((req) => games.updateCustomGame(req.user.id, req
 
 const deleteCustomGame = handle((req) => games.deleteCustomGame(req.user.id, req.params.gameId));
 
-module.exports = { getCatalog, getSession, getOpenSession, listCustomGames, saveCustomGame, updateCustomGame, deleteCustomGame };
+const getStats = handle((req) => games.statsFor(req.user.id));
+
+const getLeaderboard = handle((req) => games.leaderboardFor(req.user.id, req.params.chatId));
+
+module.exports = { getStats, getLeaderboard, getCatalog, getSession, getOpenSession, listCustomGames, saveCustomGame, updateCustomGame, deleteCustomGame };

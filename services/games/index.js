@@ -14,12 +14,14 @@ const engine = require('./engine');
 const { getGame, isAvailable, publicCatalog } = require('./catalog');
 const { FORMATS, LIMITS, toSessionContent, validateGame } = require('./customGames');
 const { GameError } = require('./errors');
+const stats = require('./stats');
 const { dbStore } = require('./store');
 
 const CREATE_COOLDOWN_MS = 5000;
 const SWEEP_INTERVAL_MS = 15000;
 // However often a chat starts games, one person gets one push about them per window
 const INVITE_PUSH_WINDOW_SECONDS = 30 * 60;
+const CHALLENGE_TTL_MS = 24 * 60 * 60 * 1000;
 // Fires a moment after the deadline so the session is due when the timer runs
 const TIMER_SLACK_MS = 25;
 
@@ -33,6 +35,16 @@ const names = (players) => {
 
 /** The plaintext line chat lists and notifications show for a game card. */
 const cardText = (card) => {
+  if (card.kind === 'challenge') {
+    const target = card.targetScore.toLocaleString('en-US');
+    if (card.status === 'completed') {
+      return card.beat
+        ? `🏆 ${card.takerName} beat ${card.challengerName}'s ${target} in ${card.gameName}`
+        : `🎯 ${card.takerName} scored ${(card.score || 0).toLocaleString('en-US')}, short of ${card.challengerName}'s ${target}`;
+    }
+    if (card.status === 'pending' || card.status === 'accepted') return `🎯 ${card.challengerName}: can you beat my ${target} in ${card.gameName}?`;
+    return `🎯 ${card.challengerName}'s ${card.gameName} challenge has closed`;
+  }
   if (card.kind === 'result') {
     const winners = card.players.filter(p => card.winnerIds.includes(p.userId));
     if (!card.scored) return `🎮 ${card.gameName} is over. See how everyone answered.`;
@@ -242,6 +254,206 @@ class GameService {
     return {};
   }
 
+  // ---------- challenges ----------
+
+  /** "Can you beat my score?" from a finished game, posted as a card in its chat. */
+  async createChallenge(userId, { sessionId } = {}) {
+    const session = await this.loadAuthorized(userId, sessionId);
+    const rules = engine.rulesOf(session);
+    const player = session.players.find(p => p.userId === userId);
+    if (session.status !== 'completed' || !rules?.scored) throw new GameError('NOT_CHALLENGEABLE');
+    if (!player?.playing || player.score <= 0) throw new GameError('NOT_CHALLENGEABLE');
+
+    const waiting = await this.store.findPendingChallenge(session.chatId, userId);
+    if (waiting) return { challenge: this.challengeCard(waiting), existing: true };
+
+    const now = this.now();
+    if (now - (this.lastCreateAt.get(userId) || 0) < CREATE_COOLDOWN_MS) throw new GameError('RATE_LIMITED');
+    this.lastCreateAt.set(userId, now);
+
+    const { peerId } = await this.authorize(userId, session.chatId);
+    const challenge = await this.store.createChallenge({
+      id: uuidv4(),
+      chatId: session.chatId,
+      challengerId: userId,
+      challengerName: player.username,
+      sourceSessionId: session.id,
+      gameType: session.gameType,
+      gameName: rules.name,
+      targetScore: player.score,
+      targetUserId: peerId || null,
+      status: 'pending',
+      dismissedBy: [],
+      cardMessageId: uuidv4(),
+      expiresAt: new Date(now + CHALLENGE_TTL_MS),
+    });
+    await this.postChallengeCard(challenge);
+    return { challenge: this.challengeCard(challenge) };
+  }
+
+  async acceptChallenge(userId, { challengeId } = {}) {
+    const found = await this.loadChallenge(userId, challengeId);
+    if (found.challengerId === userId || (found.targetUserId && found.targetUserId !== userId)) throw new GameError('NOT_YOUR_CHALLENGE');
+    const source = await this.store.get(found.sourceSessionId);
+    if (!source) throw new GameError('CHALLENGE_CLOSED');
+    // A custom game replays its own rounds: anyone who played it knows the answers
+    if (source.content && source.players.some(p => p.userId === userId && p.playing)) throw new GameError('ALREADY_PLAYED');
+    const host = await User.findByPk(userId, { attributes: ['id', 'username', 'avatar'] });
+    if (!host) throw new GameError('ACCESS_DENIED');
+
+    const sessionId = uuidv4();
+    const challenge = await this.store.updateChallenge(found.id, (current) => {
+      if (current.status !== 'pending' || new Date(current.expiresAt).getTime() <= this.now()) throw new GameError('CHALLENGE_CLOSED');
+      return { status: 'accepted', takerId: userId, takerName: host.username, sessionId };
+    });
+
+    const now = this.now();
+    const created = engine.createSession({
+      id: sessionId,
+      chatId: found.chatId,
+      gameType: found.gameType,
+      host: userSummary(host),
+      now,
+      content: source.content,
+      challenge: { id: found.id, targetScore: found.targetScore, challengerName: found.challengerName },
+    });
+    const session = await this.store.create(engine.applyAction(created, { type: 'start', userId }, now, this.rng));
+    this.schedule(session);
+    await this.updateChallengeCard(challenge);
+    return { session: engine.viewFor(session, userId, this.now()) };
+  }
+
+  /** No thanks. In a 1:1 chat that closes it; in a group others can still take it. */
+  async dismissChallenge(userId, { challengeId } = {}) {
+    const found = await this.loadChallenge(userId, challengeId);
+    if (found.challengerId === userId) throw new GameError('NOT_YOUR_CHALLENGE');
+    const challenge = await this.store.updateChallenge(found.id, (current) => {
+      if (current.status !== 'pending') return null;
+      if (current.targetUserId === userId) return { status: 'dismissed' };
+      if (current.targetUserId) throw new GameError('NOT_YOUR_CHALLENGE');
+      return { dismissedBy: [...new Set([...(current.dismissedBy || []), userId])] };
+    });
+    await this.updateChallengeCard(challenge);
+    return { challenge: this.challengeCard(challenge) };
+  }
+
+  async loadChallenge(userId, challengeId) {
+    if (!isUuid(challengeId)) throw new GameError('INVALID_REQUEST');
+    const challenge = await this.store.getChallenge(challengeId);
+    if (!challenge) throw new GameError('CHALLENGE_CLOSED');
+    try {
+      await this.authorize(userId, challenge.chatId);
+    } catch (error) {
+      if (error.code === 'ACCESS_DENIED') throw new GameError('CHALLENGE_CLOSED');
+      throw error;
+    }
+    return challenge;
+  }
+
+  /** The solo round ended. Not finishing counts as the challenge lapsing. */
+  async finishChallenge(session) {
+    const player = session.players[0];
+    if (session.status === 'completed') await this.recordResults(session);
+    const challenge = await this.store.updateChallenge(session.challenge.id, () => (
+      session.status === 'completed'
+        ? { status: 'completed', score: player.score, beat: player.score > session.challenge.targetScore }
+        : { status: 'expired' }
+    ));
+    if (challenge) await this.updateChallengeCard(challenge);
+  }
+
+  async expireChallenge(id) {
+    const challenge = await this.store.updateChallenge(id, (current) => (current.status === 'pending' ? { status: 'expired' } : null));
+    if (challenge?.status === 'expired') await this.updateChallengeCard(challenge);
+  }
+
+  challengeCard(c) {
+    return {
+      kind: 'challenge',
+      challengeId: c.id,
+      gameType: c.gameType,
+      gameName: c.gameName,
+      status: c.status,
+      challengerId: c.challengerId,
+      challengerName: c.challengerName,
+      targetScore: c.targetScore,
+      targetUserId: c.targetUserId || null,
+      takerId: c.takerId || null,
+      takerName: c.takerName || null,
+      sessionId: c.sessionId || null,
+      score: c.score ?? null,
+      beat: c.beat ?? null,
+      dismissedBy: c.dismissedBy || [],
+      expiresAt: new Date(c.expiresAt).getTime(),
+    };
+  }
+
+  async postChallengeCard(challenge) {
+    const card = this.challengeCard(challenge);
+    try {
+      const message = await Message.create({
+        id: challenge.cardMessageId,
+        chatId: challenge.chatId,
+        senderId: challenge.challengerId,
+        content: cardText(card),
+        messageType: 'game',
+        isEncrypted: false,
+        status: 'sent',
+        encryptionMetadata: { game: card },
+      });
+      await Chat.update({ lastActivityAt: new Date() }, { where: { id: challenge.chatId } });
+      const complete = await Message.findByPk(message.id, {
+        include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'avatar'] }],
+      });
+      this.emitToChat(challenge.chatId, 'new_message', complete ? complete.toJSON() : message.toJSON());
+    } catch (error) {
+      console.error('Failed to post challenge card:', error.message);
+    }
+  }
+
+  async updateChallengeCard(challenge) {
+    const card = this.challengeCard(challenge);
+    try {
+      await Message.update(
+        { content: cardText(card), encryptionMetadata: { game: card } },
+        { where: { id: challenge.cardMessageId, chatId: challenge.chatId } },
+      );
+      this.emitToChat(challenge.chatId, 'game_card_updated', { chatId: challenge.chatId, messageId: challenge.cardMessageId, game: card });
+    } catch (error) {
+      console.error('Failed to update challenge card:', error.message);
+    }
+  }
+
+  // ---------- stats (a person's own, or one chat's) ----------
+
+  async statsFor(userId) {
+    const [results, counts] = await Promise.all([this.store.userResults(userId), this.store.challengeCounts(userId)]);
+    const recentRows = results.slice(0, 20);
+    const labels = await this.store.chatLabels(userId, [...new Set(recentRows.map(r => r.chatId))]);
+    return {
+      ...stats.summarize(results, counts),
+      // Only chats the user is still in: a game there is theirs to reopen
+      recent: recentRows.filter(r => labels[r.chatId]).map(r => ({
+        sessionId: r.sessionId,
+        chatId: r.chatId,
+        chatName: labels[r.chatId],
+        gameType: r.gameType,
+        gameName: r.gameName || r.gameType,
+        score: r.score,
+        rank: r.rank,
+        won: r.won,
+        playerCount: r.playerCount,
+        completedAt: new Date(r.completedAt).getTime(),
+      })),
+    };
+  }
+
+  async leaderboardFor(userId, chatId) {
+    await this.authorize(userId, chatId);
+    const [results, members] = await Promise.all([this.store.chatResults(chatId), this.store.leaderboardMembers(chatId)]);
+    return { leaderboard: stats.leaderboard(results, members) };
+  }
+
   // ---------- clock ----------
 
   /** Moves the session on if its deadline has passed. Resolves to the session. */
@@ -276,6 +488,8 @@ class GameService {
       try {
         const due = await this.store.findDue(this.now() - 1000);
         for (const id of due) await this.tick(id);
+        const expired = await this.store.findExpiredChallengeIds(this.now());
+        for (const id of expired) await this.expireChallenge(id);
       } catch (error) {
         console.error('Game sweep failed:', error.message);
       }
@@ -307,6 +521,13 @@ class GameService {
   async afterChange(before, after) {
     if (!after || after === before) return;
     this.schedule(after);
+    // A solo round is private until it ends: only its player gets updates
+    if (after.challenge) {
+      const view = engine.viewFor(after, null, this.now());
+      for (const player of after.players) this.emitToUser(player.userId, 'game_state', view);
+      if (engine.isOpen(before) && !engine.isOpen(after)) await this.finishChallenge(after);
+      return;
+    }
     this.emitToChat(after.chatId, 'game_state', engine.viewFor(after, null, this.now()));
 
     const card = engine.cardFor(after, 'invite');
@@ -370,6 +591,7 @@ class GameService {
         chatId: session.chatId,
         userId: p.userId,
         gameType: session.gameType,
+        gameName: engine.rulesOf(session)?.name || null,
         score: p.score,
         rank: p.rank,
         won: winners.has(p.userId),
@@ -384,6 +606,10 @@ class GameService {
 
   emitToChat(chatId, event, payload) {
     if (this.io) this.io.to(`chat_${chatId}`).emit(event, payload);
+  }
+
+  emitToUser(userId, event, payload) {
+    if (this.io) this.io.to(`user_${userId}`).emit(event, payload);
   }
 
   /**

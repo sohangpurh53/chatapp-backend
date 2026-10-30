@@ -97,7 +97,7 @@ const newPlayer = (user, status, now) => ({
  * or the members a group host picked) are listed as invited. Anyone else in the
  * conversation can still join while the lobby is open.
  */
-const createSession = ({ id, chatId, gameType, host, invitees = [], direct = false, now, rematchOfId = null, content = null }) => {
+const createSession = ({ id, chatId, gameType, host, invitees = [], direct = false, now, rematchOfId = null, content = null, challenge = null }) => {
   if (!getGame(gameType)) throw new GameError('UNKNOWN_GAME');
   const players = [newPlayer(host, 'joined', now)];
   for (const user of invitees) {
@@ -124,6 +124,8 @@ const createSession = ({ id, chatId, gameType, host, invitees = [], direct = fal
     rematchOfId,
     // A custom game's own prompts (see rulesOf); null for catalog games
     content,
+    // Set on a solo round answering a challenge: { id, targetScore, challengerName }
+    challenge,
   };
 };
 
@@ -152,6 +154,10 @@ const rankPlayers = (session) => {
 
 const winnerIds = (session) => {
   if (session.status !== 'completed' || !rulesOf(session)?.scored) return [];
+  // A solo round is won by beating the score it answers
+  if (session.challenge) {
+    return session.players.filter(p => p.playing && p.score > session.challenge.targetScore).map(p => p.userId);
+  }
   return session.players
     .filter(p => p.playing && p.rank === 1 && p.score > 0)
     .map(p => p.userId);
@@ -302,7 +308,7 @@ const applyAction = (session, action, now, rng = Math.random) => {
       if (userId !== next.hostId) throw new GameError('NOT_HOST');
       if (next.status !== 'lobby') throw new GameError('ALREADY_STARTED');
       const joined = joinedPlayers(next);
-      if (joined.length < game.minPlayers) throw new GameError('NOT_ENOUGH_PLAYERS');
+      if (joined.length < (next.challenge ? 1 : game.minPlayers)) throw new GameError('NOT_ENOUGH_PLAYERS');
       joined.forEach(p => { p.playing = true; });
       next.status = 'active';
       next.startedAt = now;
@@ -392,6 +398,7 @@ const viewFor = (session, viewerId, now) => {
     // A made-up game: its rules, and a flag so apps can say the AI wrote it
     rules: session.content?.rules || null,
     aiGenerated: !!session.content?.aiGenerated,
+    challenge: session.challenge || null,
     players: session.players.map(publicPlayer),
     winnerIds: winnerIds(session),
     round: null,

@@ -11,6 +11,8 @@ router.use(authenticateToken, limiter);
 router.get('/catalog', games.getCatalog);
 router.get('/sessions/:sessionId', games.getSession);
 router.get('/chats/:chatId/open', games.getOpenSession);
+router.get('/stats', games.getStats);
+router.get('/chats/:chatId/leaderboard', games.getLeaderboard);
 router.get('/custom', games.listCustomGames);
 router.post('/custom', games.saveCustomGame);
 router.put('/custom/:gameId', games.updateCustomGame);

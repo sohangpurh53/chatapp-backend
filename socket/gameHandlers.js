@@ -35,6 +35,9 @@ function registerGameHandlers(socket) {
   for (const [event, type] of Object.entries(ACTIONS)) {
     on(event, (data) => games.act(socket.userId, data.sessionId, { type }));
   }
+  on('game_challenge_create', (data) => games.createChallenge(socket.userId, data));
+  on('game_challenge_accept', (data) => games.acceptChallenge(socket.userId, data));
+  on('game_challenge_dismiss', (data) => games.dismissChallenge(socket.userId, data));
   on('game_answer', (data) => games.act(socket.userId, data.sessionId, {
     type: 'answer',
     round: data.round,

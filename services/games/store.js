@@ -3,7 +3,7 @@
 // a transaction holding the row lock, so two servers (or two taps) can never
 // apply conflicting moves to the same session.
 const { Op } = require('sequelize');
-const { sequelize, GameSession, GameResult, CustomGame } = require('../../models');
+const { sequelize, Chat, ChatParticipant, User, GameSession, GameResult, GameChallenge, CustomGame } = require('../../models');
 
 const ms = (value) => (value ? new Date(value).getTime() : null);
 const date = (value) => (value ? new Date(value) : null);
@@ -29,6 +29,7 @@ const toSession = (row) => {
     deadline: ms(r.deadline),
     rematchOfId: r.rematchOfId || null,
     content: r.content || null,
+    challenge: r.challenge || null,
     cardMessageId: r.cardMessageId || null,
     resultMessageId: r.resultMessageId || null,
   };
@@ -60,6 +61,8 @@ const dbStore = {
       createdBy: session.createdBy,
       rematchOfId: session.rematchOfId,
       content: session.content,
+      challengeId: session.challenge?.id || null,
+      challenge: session.challenge,
       ...toRow(session),
     });
     return toSession(row);
@@ -71,7 +74,8 @@ const dbStore = {
 
   async findOpen(chatId) {
     return toSession(await GameSession.findOne({
-      where: { chatId, status: { [Op.in]: OPEN_STATUSES } },
+      // Solo challenge rounds don't take up the chat's one open game
+      where: { chatId, status: { [Op.in]: OPEN_STATUSES }, challengeId: null },
       order: [['createdAt', 'DESC']],
     }));
   },
@@ -107,6 +111,92 @@ const dbStore = {
   async saveResults(rows) {
     if (!rows.length) return;
     await GameResult.bulkCreate(rows.map(r => ({ ...r, completedAt: new Date(r.completedAt) })), { ignoreDuplicates: true });
+  },
+
+  // ---------- challenges ----------
+
+  async createChallenge(values) {
+    return (await GameChallenge.create(values)).get({ plain: true });
+  },
+
+  async getChallenge(id) {
+    const row = await GameChallenge.findByPk(id);
+    return row ? row.get({ plain: true }) : null;
+  },
+
+  /** This person's challenge still waiting in the chat, if any. */
+  async findPendingChallenge(chatId, challengerId) {
+    const row = await GameChallenge.findOne({ where: { chatId, challengerId, status: 'pending' } });
+    return row ? row.get({ plain: true }) : null;
+  },
+
+  /** Same contract as update(): `change` returns new values, or null for no change. */
+  async updateChallenge(id, change) {
+    return sequelize.transaction(async (transaction) => {
+      const row = await GameChallenge.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
+      if (!row) return null;
+      const values = await change(row.get({ plain: true }));
+      if (values) await row.update(values, { transaction });
+      return row.get({ plain: true });
+    });
+  },
+
+  async findExpiredChallengeIds(now, limit = 50) {
+    const rows = await GameChallenge.findAll({
+      where: { status: 'pending', expiresAt: { [Op.lte]: new Date(now) } },
+      attributes: ['id'],
+      limit,
+    });
+    return rows.map(r => r.id);
+  },
+
+  // ---------- stats ----------
+
+  async userResults(userId, limit = 500) {
+    const rows = await GameResult.findAll({ where: { userId }, order: [['completedAt', 'DESC']], limit });
+    return rows.map(r => r.get({ plain: true }));
+  },
+
+  async chatResults(chatId) {
+    const rows = await GameResult.findAll({ where: { chatId }, attributes: ['userId', 'score', 'won'] });
+    return rows.map(r => r.get({ plain: true }));
+  },
+
+  async challengeCounts(userId) {
+    const [challengesCompleted, challengesWon] = await Promise.all([
+      GameChallenge.count({ where: { takerId: userId, status: 'completed' } }),
+      GameChallenge.count({ where: { takerId: userId, status: 'completed', beat: true } }),
+    ]);
+    return { challengesCompleted, challengesWon };
+  },
+
+  /** { chatId: display name } for the chats this user is still in. */
+  async chatLabels(userId, chatIds) {
+    if (!chatIds.length) return {};
+    const memberships = await ChatParticipant.findAll({ where: { userId, chatId: chatIds, isActive: true }, attributes: ['chatId'] });
+    const chats = await Chat.findAll({
+      where: { id: memberships.map(m => m.chatId) },
+      attributes: ['id', 'isGroup', 'name', 'participant1Id', 'participant2Id'],
+    });
+    const peerId = (chat) => (chat.participant1Id === userId ? chat.participant2Id : chat.participant1Id);
+    const peers = await User.findAll({
+      where: { id: chats.filter(c => !c.isGroup).map(peerId) },
+      attributes: ['id', 'username'],
+    });
+    const nameOf = new Map(peers.map(p => [p.id, p.username]));
+    return Object.fromEntries(chats.map(c => [c.id, c.isGroup ? c.name : nameOf.get(peerId(c)) || 'Chat']));
+  },
+
+  /** Active members who haven't opted out of leaderboards. */
+  async leaderboardMembers(chatId) {
+    const rows = await ChatParticipant.findAll({
+      where: { chatId, isActive: true },
+      attributes: ['userId'],
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'notificationPreferences'] }],
+    });
+    return rows
+      .filter(r => r.user && r.user.notificationPreferences?.showGameStats !== false)
+      .map(r => ({ userId: r.userId, username: r.user.username }));
   },
 
   // Saved custom games: every lookup is by owner, so ids can't reach someone else's

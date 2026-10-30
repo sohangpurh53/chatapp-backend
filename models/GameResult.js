@@ -34,6 +34,11 @@ const GameResult = sequelize.define('GameResult', {
     type: DataTypes.STRING(40),
     allowNull: false
   },
+  // Custom games have their own names
+  gameName: {
+    type: DataTypes.STRING(60),
+    allowNull: true
+  },
   score: {
     type: DataTypes.INTEGER,
     allowNull: false,

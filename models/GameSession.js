@@ -96,6 +96,16 @@ const GameSession = sequelize.define('GameSession', {
   rematchOfId: {
     type: DataTypes.UUID,
     allowNull: true
+  },
+  // A solo round answering a challenge: stays out of the chat until it ends
+  challengeId: {
+    type: DataTypes.UUID,
+    allowNull: true
+  },
+  // { id, targetScore, challengerName }
+  challenge: {
+    type: DataTypes.JSON,
+    allowNull: true
   }
 }, {
   indexes: [
