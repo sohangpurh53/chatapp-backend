@@ -36,6 +36,9 @@ const assistLimiter = createRateLimiter({
 router.post('/assist', assistLimiter, aiAssist.assist);
 router.post('/memory', assistLimiter, aiAssist.ask);
 router.post('/actions', assistLimiter, aiAssist.findActions);
+// A game is one large request: a smaller budget than the assistant
+const gameLimiter = createRateLimiter({ name: 'ai-games', windowMs: 60 * 1000, max: 10, message: 'Too many game requests. Wait a moment.' });
+router.post('/games', gameLimiter, aiAssist.createGame);
 // Auto-translation can fire for several messages in a row: its own, larger budget
 const translateLimiter = createRateLimiter({ name: 'ai-translate', windowMs: 60 * 1000, max: 40, message: 'Too many translations. Wait a moment.' });
 router.post('/translate', translateLimiter, aiAssist.translateMessages);

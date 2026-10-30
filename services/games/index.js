@@ -10,7 +10,8 @@ const { Chat, User, Message, ChatParticipant } = require('../../models');
 const { isUuid } = require('../../utils/ids');
 const { blockState, directPeerId } = require('../../utils/blocks');
 const engine = require('./engine');
-const { isAvailable, publicCatalog } = require('./catalog');
+const { getGame, isAvailable, publicCatalog } = require('./catalog');
+const { FORMATS, LIMITS, toSessionContent, validateGame } = require('./customGames');
 const { GameError } = require('./errors');
 const { dbStore } = require('./store');
 
@@ -111,7 +112,18 @@ class GameService {
    * at a time: if one is already open, that one is returned instead.
    * `rematchOf` re-invites the players of an earlier session in the same chat.
    */
-  async create(userId, { chatId, gameType, rematchOf } = {}) {
+  async create(userId, { chatId, gameType, rematchOf, customGameId } = {}) {
+    // A saved custom game decides its own rules; a rematch brings its content along
+    let customContent = null;
+    if (customGameId !== undefined && customGameId !== null) {
+      if (!isUuid(customGameId)) throw new GameError('INVALID_REQUEST');
+      const saved = await this.store.getCustomGame(customGameId, userId);
+      if (!saved) throw new GameError('GAME_NOT_FOUND');
+      gameType = FORMATS[saved.format];
+      customContent = toSessionContent(saved);
+    } else if (getGame(gameType)?.custom && !rematchOf) {
+      throw new GameError('UNKNOWN_GAME');
+    }
     if (typeof gameType !== 'string' || !isAvailable(gameType)) throw new GameError('UNKNOWN_GAME');
     const { peerId } = await this.authorize(userId, chatId);
 
@@ -152,7 +164,7 @@ class GameService {
       direct: !!peerId,
       now,
       rematchOfId: previous ? previous.id : null,
-      content: previous ? previous.content : null,
+      content: previous ? previous.content : customContent,
     });
     // Card ids are fixed up front, so posting a card again (a retry, another
     // server) finds the one already there instead of adding a second
@@ -196,6 +208,32 @@ class GameService {
     const current = await this.tick(open.id);
     if (!current || !engine.isOpen(current)) return { session: null };
     return { session: engine.viewFor(current, userId, this.now()) };
+  }
+
+  // ---------- saved custom games (private to their owner) ----------
+
+  listCustomGames(userId) {
+    return this.store.listCustomGames(userId).then(games => ({ games }));
+  }
+
+  async saveCustomGame(userId, input) {
+    const { game } = validateGame(input);
+    if ((await this.store.countCustomGames(userId)) >= LIMITS.maxSavedGames) throw new GameError('TOO_MANY_GAMES');
+    return { game: await this.store.createCustomGame(userId, game) };
+  }
+
+  async updateCustomGame(userId, gameId, input) {
+    if (!isUuid(gameId)) throw new GameError('INVALID_REQUEST');
+    const { game } = validateGame(input);
+    const updated = await this.store.updateCustomGame(gameId, userId, game);
+    if (!updated) throw new GameError('GAME_NOT_FOUND');
+    return { game: updated };
+  }
+
+  async deleteCustomGame(userId, gameId) {
+    if (!isUuid(gameId)) throw new GameError('INVALID_REQUEST');
+    if (!(await this.store.deleteCustomGame(gameId, userId))) throw new GameError('GAME_NOT_FOUND');
+    return {};
   }
 
   // ---------- clock ----------

@@ -1,0 +1,36 @@
+// Emoji Puzzle clues. Written for ChatApp; no third-party content. Clues are
+// everyday phrases and things, so nobody needs to know a particular film or brand.
+// `answer` is the index of the correct option before the engine shuffles them.
+
+module.exports = [
+  { id: 'e01', question: '🌧️🐱🐶', options: ['Raining cats and dogs', 'Pet shop', 'Wet weekend', 'Animal shelter'], answer: 0 },
+  { id: 'e02', question: '🍰🚶', options: ['A piece of cake', 'Bakery walk', 'Sweet tooth', 'Birthday party'], answer: 0 },
+  { id: 'e03', question: '🧊🔨', options: ['Break the ice', 'Cold snap', 'Ice sculpture', 'Frozen tools'], answer: 0 },
+  { id: 'e04', question: '🐘🏠', options: ['The elephant in the room', 'Big house', 'Zoo keeper', 'Heavy furniture'], answer: 0 },
+  { id: 'e05', question: '⏰💰', options: ['Time is money', 'Payday', 'Alarm clock', 'Rush hour'], answer: 0 },
+  { id: 'e06', question: '🌙☀️', options: ['Day and night', 'Solar eclipse', 'Good morning', 'Weather report'], answer: 0 },
+  { id: 'e07', question: '🐦🐦🪨', options: ['Two birds, one stone', 'Bird watching', 'Rock nest', 'Early bird'], answer: 0 },
+  { id: 'e08', question: '🍎👨‍⚕️🚫', options: ['An apple a day keeps the doctor away', 'Healthy snack', 'Hospital food', 'Fruit allergy'], answer: 0 },
+  { id: 'e09', question: '💔', options: ['Heartbreak', 'Love letter', 'Heart surgery', 'Valentine'], answer: 0 },
+  { id: 'e10', question: '🔥🐉', options: ['Dragon fire', 'Hot pepper', 'Campfire', 'Volcano'], answer: 0 },
+  { id: 'e11', question: '🌊🏄', options: ['Surfing', 'Fishing', 'Swimming', 'Sailing'], answer: 0 },
+  { id: 'e12', question: '🚗💨', options: ['Fast car', 'Car wash', 'Traffic jam', 'Parking lot'], answer: 0 },
+  { id: 'e13', question: '📚🐛', options: ['Bookworm', 'Library card', 'Nature study', 'Homework'], answer: 0 },
+  { id: 'e14', question: '☕🌅', options: ['Morning coffee', 'Tea party', 'Night shift', 'Sunset cruise'], answer: 0 },
+  { id: 'e15', question: '🍕🌙', options: ['Late-night pizza', 'Moon cheese', 'Dinner date', 'Italian holiday'], answer: 0 },
+  { id: 'e16', question: '🐝🍯', options: ['Honey bee', 'Sweet tea', 'Flower garden', 'Yellow jacket'], answer: 0 },
+  { id: 'e17', question: '❄️⛄', options: ['Snowman', 'Ice cream', 'Winter coat', 'Polar bear'], answer: 0 },
+  { id: 'e18', question: '🌈💰', options: ['Pot of gold', 'Colourful wallet', 'Lucky day', 'Art sale'], answer: 0 },
+  { id: 'e19', question: '🦉🌃', options: ['Night owl', 'Dark forest', 'Wise teacher', 'Late bus'], answer: 0 },
+  { id: 'e20', question: '🥚🐔', options: ['Chicken and egg', 'Breakfast', 'Farm visit', 'Easter hunt'], answer: 0 },
+  { id: 'e21', question: '👀🌊', options: ['Sea view', 'Crying', 'Eye drops', 'Blue eyes'], answer: 0 },
+  { id: 'e22', question: '🎂🕯️', options: ['Birthday cake', 'Power cut', 'Candle shop', 'Wedding'], answer: 0 },
+  { id: 'e23', question: '🏃‍♂️🥇', options: ['Winning a race', 'Morning jog', 'Gold rush', 'Gym membership'], answer: 0 },
+  { id: 'e24', question: '🌻☀️', options: ['Sunflower', 'Summer holiday', 'Solar panel', 'Garden party'], answer: 0 },
+  { id: 'e25', question: '🐟🚲', options: ['A fish out of water', 'Fish delivery', 'Tandem ride', 'River path'], answer: 0 },
+  { id: 'e26', question: '🗝️🏠', options: ['House key', 'Locked out', 'New neighbour', 'Doorbell'], answer: 0 },
+  { id: 'e27', question: '🌋🔥', options: ['Volcano', 'Bonfire', 'Hot spring', 'Forest fire'], answer: 0 },
+  { id: 'e28', question: '🦸🦴', options: ['Backbone of the team', 'Dog hero', 'Museum guard', 'Strong arm'], answer: 0 },
+  { id: 'e29', question: '🚀🌕', options: ['Moon landing', 'Fireworks', 'Night flight', 'Star gazing'], answer: 0 },
+  { id: 'e30', question: '🍋🥤', options: ['Lemonade', 'Sour face', 'Fruit salad', 'Smoothie bar'], answer: 0 },
+];

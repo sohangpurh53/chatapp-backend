@@ -9,6 +9,7 @@ const FEATURES = [
   { key: 'memory', label: 'Group memory & search', description: 'Answer questions about past messages.' },
   { key: 'actions', label: 'Action cards', description: 'Turn conversations into tasks, polls and events.' },
   { key: 'translation', label: 'Language bridge', description: 'Translate messages and drafts.' },
+  { key: 'games', label: 'Game creator', description: 'Turn an idea into a game to play in a chat.' },
 ];
 const FEATURE_KEYS = FEATURES.map(f => f.key);
 

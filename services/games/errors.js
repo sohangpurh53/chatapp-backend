@@ -17,6 +17,9 @@ const MESSAGES = {
   ALREADY_ANSWERED: 'You already answered this question.',
   INVALID_ANSWER: 'That answer is not one of the options.',
   RATE_LIMITED: 'Slow down a little and try again.',
+  INVALID_GAME: 'This game needs a title and at least 3 complete rounds.',
+  GAME_NOT_FOUND: 'That saved game no longer exists.',
+  TOO_MANY_GAMES: 'You have saved the maximum number of games. Delete one to save another.',
 };
 
 class GameError extends Error {
@@ -31,7 +34,9 @@ class GameError extends Error {
 const STATUS = {
   INVALID_REQUEST: 400,
   INVALID_ANSWER: 400,
+  INVALID_GAME: 400,
   UNKNOWN_GAME: 404,
+  GAME_NOT_FOUND: 404,
   SESSION_NOT_FOUND: 404,
   ACCESS_DENIED: 403,
   USER_BLOCKED: 403,

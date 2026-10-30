@@ -2,6 +2,8 @@
 // prompt with a few options, the server holds the answer and the clock, and scores
 // are worked out on the server when the round closes.
 const trivia = require('./content/trivia');
+const emojiPuzzle = require('./content/emojiPuzzle');
+const wouldYouRather = require('./content/wouldYouRather');
 
 // Points for a correct answer: a base plus a speed bonus that shrinks to nothing
 // as the round clock runs out (the time is measured on the server)
@@ -30,6 +32,64 @@ const GAMES = {
     bank: trivia,
     score: speedScore,
   },
+  emoji_puzzle: {
+    id: 'emoji_puzzle',
+    name: 'Emoji Puzzle',
+    tagline: 'Crack the clue before your friends do.',
+    description: 'Five emoji clues. Pick the phrase they spell out. Faster right answers score more.',
+    category: 'puzzle',
+    minPlayers: 2,
+    maxPlayers: 8,
+    rounds: 5,
+    roundMs: 20000,
+    scored: true,
+    estimatedMinutes: 2,
+    bank: emojiPuzzle,
+    score: speedScore,
+  },
+  would_you_rather: {
+    id: 'would_you_rather',
+    name: 'Would You Rather?',
+    tagline: 'No right answers. Just surprises.',
+    description: 'Five tough choices. See how everyone split, with no scores and no winners.',
+    category: 'casual',
+    minPlayers: 2,
+    maxPlayers: 8,
+    rounds: 5,
+    roundMs: 15000,
+    scored: false,
+    estimatedMinutes: 2,
+    bank: wouldYouRather,
+    score: () => 0,
+  },
+  // Rules for games people make: each session brings its own prompts, so these
+  // have no bank and never appear in the picker (see customGames.js)
+  custom_quiz: {
+    id: 'custom_quiz',
+    name: 'Custom quiz',
+    custom: true,
+    category: 'trivia',
+    minPlayers: 2,
+    maxPlayers: 8,
+    rounds: 5,
+    roundMs: 20000,
+    scored: true,
+    bank: null,
+    score: speedScore,
+  },
+  custom_poll: {
+    id: 'custom_poll',
+    name: 'Custom poll',
+    custom: true,
+    category: 'casual',
+    minPlayers: 2,
+    maxPlayers: 8,
+    rounds: 5,
+    roundMs: 20000,
+    scored: false,
+    bank: null,
+    score: () => 0,
+  },
 };
 
 // A game can be switched off (for example while its content is being fixed)
@@ -43,7 +103,7 @@ const getGame = (id) => (Object.prototype.hasOwnProperty.call(GAMES, id) ? GAMES
 const isAvailable = (id) => !!getGame(id) && !DISABLED.has(id);
 
 /** What apps show in the game picker: no question banks, no scoring rules. */
-const publicCatalog = () => Object.values(GAMES).map(game => ({
+const publicCatalog = () => Object.values(GAMES).filter(game => !game.custom).map(game => ({
   id: game.id,
   name: game.name,
   tagline: game.tagline,

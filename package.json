@@ -22,6 +22,7 @@
     "test-apk-upload": "node test-apk-upload.js",
     "test": "node --require ./__tests__/setup.js --test \"__tests__/**/*.test.js\"",
     "test:ai": "node --require ./__tests__/setup.js --test \"__tests__/ai/*.test.js\"",
+    "test:games": "node --require ./__tests__/setup.js --test \"__tests__/games/*.test.js\"",
     "generate-ai-key": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
   },
   "keywords": [

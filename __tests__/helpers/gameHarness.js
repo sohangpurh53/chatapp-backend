@@ -1,5 +1,6 @@
 // An in-memory stand-in for the game tables and the chat rows the games code
 // reads, so game tests run the real service and sockets without a database.
+const { randomUUID } = require('node:crypto');
 const { Chat, User, Message, ChatParticipant, UserBlock } = require('../../models');
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
@@ -8,9 +9,11 @@ const copy = (value) => JSON.parse(JSON.stringify(value));
 function memoryStore() {
   const sessions = new Map();
   const results = [];
+  const customGames = new Map();
   return {
     sessions,
     results,
+    customGames,
     async create(session) {
       sessions.set(session.id, copy(session));
       return copy(session);
@@ -33,6 +36,30 @@ function memoryStore() {
       return [...sessions.values()]
         .filter(s => (s.status === 'lobby' || s.status === 'active') && s.deadline && s.deadline <= now)
         .map(s => s.id);
+    },
+    async getCustomGame(id, userId) {
+      const game = customGames.get(id);
+      return game && game.userId === userId ? copy(game) : null;
+    },
+    async listCustomGames(userId) {
+      return [...customGames.values()].filter(g => g.userId === userId).map(copy);
+    },
+    async countCustomGames(userId) {
+      return [...customGames.values()].filter(g => g.userId === userId).length;
+    },
+    async createCustomGame(userId, game) {
+      const row = { ...copy(game), id: randomUUID(), userId };
+      customGames.set(row.id, row);
+      return copy(row);
+    },
+    async updateCustomGame(id, userId, game) {
+      if (customGames.get(id)?.userId !== userId) return null;
+      customGames.set(id, { ...customGames.get(id), ...copy(game) });
+      return copy(customGames.get(id));
+    },
+    async deleteCustomGame(id, userId) {
+      if (customGames.get(id)?.userId !== userId) return false;
+      return customGames.delete(id);
     },
     async saveResults(rows) {
       for (const row of rows) {

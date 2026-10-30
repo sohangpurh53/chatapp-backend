@@ -3,7 +3,7 @@
 // a transaction holding the row lock, so two servers (or two taps) can never
 // apply conflicting moves to the same session.
 const { Op } = require('sequelize');
-const { sequelize, GameSession, GameResult } = require('../../models');
+const { sequelize, GameSession, GameResult, CustomGame } = require('../../models');
 
 const ms = (value) => (value ? new Date(value).getTime() : null);
 const date = (value) => (value ? new Date(value) : null);
@@ -107,6 +107,35 @@ const dbStore = {
   async saveResults(rows) {
     if (!rows.length) return;
     await GameResult.bulkCreate(rows.map(r => ({ ...r, completedAt: new Date(r.completedAt) })), { ignoreDuplicates: true });
+  },
+
+  // Saved custom games: every lookup is by owner, so ids can't reach someone else's
+  async getCustomGame(id, userId) {
+    const row = await CustomGame.findOne({ where: { id, userId } });
+    return row ? row.get({ plain: true }) : null;
+  },
+
+  async listCustomGames(userId) {
+    const rows = await CustomGame.findAll({ where: { userId }, order: [['updatedAt', 'DESC']] });
+    return rows.map(r => r.get({ plain: true }));
+  },
+
+  countCustomGames(userId) {
+    return CustomGame.count({ where: { userId } });
+  },
+
+  async createCustomGame(userId, game) {
+    return (await CustomGame.create({ ...game, userId })).get({ plain: true });
+  },
+
+  async updateCustomGame(id, userId, game) {
+    const row = await CustomGame.findOne({ where: { id, userId } });
+    if (!row) return null;
+    return (await row.update(game)).get({ plain: true });
+  },
+
+  async deleteCustomGame(id, userId) {
+    return (await CustomGame.destroy({ where: { id, userId } })) > 0;
   },
 };
 

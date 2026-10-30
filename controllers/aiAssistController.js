@@ -5,6 +5,7 @@ const runner = require('../services/ai/runner');
 const memory = require('../services/ai/memory');
 const actions = require('../services/ai/actions');
 const translate = require('../services/ai/translate');
+const gameCreator = require('../services/ai/gameCreator');
 const privacy = require('../services/ai/privacy');
 const { Chat } = require('../models');
 
@@ -158,6 +159,40 @@ const findActions = async (req, res) => {
   }
 };
 
+// POST /ai/games: draft a game from a description, or change a draft. Only
+// messages the user ticked are sent. The draft goes back to the phone unsaved.
+const createGame = async (req, res) => {
+  const controller = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
+  try {
+    const input = gameCreator.parseRequest(req.body);
+    if (input.conversation) await requireMembership(input.chatId, req.user.id);
+    const { result, target } = await runner.runFeature({
+      userId: req.user.id,
+      feature: 'games',
+      action: input.draft ? 'refine' : 'create',
+      // Without chat messages this is only what the user typed
+      scope: input.conversation ? 'conversation' : 'drafts',
+      signal: controller.signal,
+      build: (capabilities, settings) => ({
+        messages: gameCreator.buildMessages(input.evidence.length ? capEvidence(input, settings) : input),
+        json: capabilities.structuredOutput,
+        maxTokens: 6000,
+        temperature: 0.7,
+        lowReasoning: true,
+      }),
+    });
+    if (result.finishReason === 'length' && !result.text.trim()) {
+      throw new AiError('BAD_RESPONSE', 'The model ran out of room before answering. Try fewer rounds.');
+    }
+    res.json({ ...gameCreator.parseResult(result.text), provider: target });
+  } catch (error) {
+    sendFailure(res, error, 'Creating the game failed. Try again.');
+  }
+};
+
 // POST /ai/translate: translate decrypted messages into one language. The app
 // keeps the originals and shows translations beside them.
 const translateMessages = async (req, res) => {
@@ -198,4 +233,4 @@ const options = () => ({
   memory: { maxEvidence: memory.LIMITS.evidenceItems, maxChars: memory.LIMITS.totalChars, maxQuestionChars: memory.LIMITS.questionChars },
 });
 
-module.exports = { assist, ask, findActions, translateMessages, options };
+module.exports = { assist, ask, findActions, translateMessages, createGame, options };

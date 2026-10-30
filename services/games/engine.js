@@ -389,6 +389,9 @@ const viewFor = (session, viewerId, now) => {
     totalRounds: session.state?.prompts.length || game?.rounds,
     roundSeconds: game ? Math.round(game.roundMs / 1000) : null,
     scored: !!game?.scored,
+    // A made-up game: its rules, and a flag so apps can say the AI wrote it
+    rules: session.content?.rules || null,
+    aiGenerated: !!session.content?.aiGenerated,
     players: session.players.map(publicPlayer),
     winnerIds: winnerIds(session),
     round: null,

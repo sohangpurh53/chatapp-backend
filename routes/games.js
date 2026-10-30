@@ -11,5 +11,9 @@ router.use(authenticateToken, limiter);
 router.get('/catalog', games.getCatalog);
 router.get('/sessions/:sessionId', games.getSession);
 router.get('/chats/:chatId/open', games.getOpenSession);
+router.get('/custom', games.listCustomGames);
+router.post('/custom', games.saveCustomGame);
+router.put('/custom/:gameId', games.updateCustomGame);
+router.delete('/custom/:gameId', games.deleteCustomGame);
 
 module.exports = router;

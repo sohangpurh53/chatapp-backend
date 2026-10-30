@@ -293,3 +293,45 @@ test('prompts are drawn without repeats and keep their correct answer', () => {
     assert.equal(p.options[p.correctIndex], source.options[source.answer]);
   }
 });
+
+describe('built-in content', () => {
+  for (const id of ['quick_trivia', 'emoji_puzzle', 'would_you_rather']) {
+    test(`${id}: every prompt is playable, with no repeats`, () => {
+      const game = GAMES[id];
+      assert.ok(game.bank.length >= game.rounds * 4);
+      assert.equal(new Set(game.bank.map(p => p.id)).size, game.bank.length);
+      for (const prompt of game.bank) {
+        assert.ok(prompt.options.length >= 2 && prompt.options.length <= 4);
+        assert.equal(new Set(prompt.options).size, prompt.options.length);
+        if (game.scored) assert.ok(prompt.options[prompt.answer]);
+        else assert.equal(prompt.answer, undefined);
+      }
+    });
+  }
+
+  test('Would You Rather has no right answers, scores or winners', () => {
+    let s = engine.createSession({ id: 's', chatId: 'c', gameType: 'would_you_rather', host: user('alice'), now: 0 });
+    s = act(s, 'join', 'bob', 1);
+    s = act(s, 'start', 'alice', 2);
+    while (s.status === 'active') {
+      if (s.state.phase === 'question') {
+        const round = s.state.round;
+        const t = s.state.phaseStartedAt + 10;
+        s = act(s, 'answer', 'alice', t, { round, choice: 0 });
+        s = act(s, 'answer', 'bob', t, { round, choice: 1 });
+        const revealed = engine.viewFor(s, 'bob', 0).round;
+        assert.equal(revealed.correctIndex, null);
+        assert.equal(revealed.results.alice.points, 0);
+      }
+      s = engine.advance(s, s.deadline);
+    }
+    assert.equal(s.status, 'completed');
+    assert.deepEqual(engine.winnerIds(s), []);
+    assert.ok(s.players.every(p => p.score === 0));
+  });
+
+  test('custom rule sets never reach the picker', () => {
+    const { publicCatalog } = require('../../services/games/catalog');
+    assert.deepEqual(publicCatalog().map(g => g.id), ['quick_trivia', 'emoji_puzzle', 'would_you_rather']);
+  });
+});

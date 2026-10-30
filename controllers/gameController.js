@@ -22,4 +22,12 @@ const getSession = handle((req) => games.get(req.user.id, req.params.sessionId))
 
 const getOpenSession = handle((req) => games.openForChat(req.user.id, req.params.chatId));
 
-module.exports = { getCatalog, getSession, getOpenSession };
+const listCustomGames = handle((req) => games.listCustomGames(req.user.id));
+
+const saveCustomGame = handle((req) => games.saveCustomGame(req.user.id, req.body));
+
+const updateCustomGame = handle((req) => games.updateCustomGame(req.user.id, req.params.gameId, req.body));
+
+const deleteCustomGame = handle((req) => games.deleteCustomGame(req.user.id, req.params.gameId));
+
+module.exports = { getCatalog, getSession, getOpenSession, listCustomGames, saveCustomGame, updateCustomGame, deleteCustomGame };
