@@ -22,7 +22,8 @@ const Notification = sequelize.define('Notification', {
       'missed_call',
       'new_message',
       'call_ended',
-      'call_declined'
+      'call_declined',
+      'game_invite'
     ),
     allowNull: false
   },

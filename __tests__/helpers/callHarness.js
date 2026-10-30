@@ -9,9 +9,11 @@ const { io: connectClient } = require('socket.io-client');
 // record what would have been pushed instead
 const pushes = [];
 const missedCalls = [];
+const gameInvites = [];
 const notificationService = {
   notifyMissedCall: async (data) => { missedCalls.push(data); },
   notifyNewMessage: async () => {},
+  notifyGameInvite: async (data) => { gameInvites.push(data); },
 };
 require.cache[require.resolve('../../services/notificationService')] = {
   id: 'notificationService', loaded: true, exports: notificationService,
@@ -213,4 +215,4 @@ async function startServer({ timings } = {}) {
   };
 }
 
-module.exports = { installCallStore, startServer, Phone, sleep, until, redisService };
+module.exports = { gameInvites, installCallStore, startServer, Phone, sleep, until, redisService };

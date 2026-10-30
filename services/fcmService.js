@@ -3,6 +3,8 @@ const { User, Notification, UserDevice } = require('../models');
 const { Op } = require('sequelize');
 const deviceService = require('./deviceService');
 
+const GAME_INVITE_TTL_MS = 10 * 60 * 1000;
+
 class FCMService {
   /**
    * Register or update FCM token for a user device
@@ -215,6 +217,8 @@ class FCMService {
       const isEncryptedMessage = notification.type === 'new_message' &&
                                  notification?.data?.isEncrypted === 'true';
       const isDataOnly = isCallNotification || isCallEnded || isEncryptedMessage;
+      // An invite is pointless once its lobby has closed
+      const ttlMs = notification.ttlMs || (notification.type === 'game_invite' ? GAME_INVITE_TTL_MS : null);
 
       const message = {
         token: fcmToken,
@@ -240,7 +244,7 @@ class FCMService {
                      notification?.data?.type === 'incoming_call_offline') ? 'high' : 'normal',
           // A ring delivered after the call stopped ringing is worse than none (FCM keeps
           // undelivered messages for 4 weeks by default)
-          ...(notification.ttlMs && { ttl: notification.ttlMs }),
+          ...(ttlMs && { ttl: ttlMs }),
           // ✅ FIXED: Only include notification config for non-call notifications
           ...(!isDataOnly && {
             notification: {
@@ -356,6 +360,8 @@ class FCMService {
         // Group chats have their own switch
         if (String(data?.isGroup) === 'true' && preferences.groupMessages === false) return false;
         return true;
+      case 'game_invite':
+        return preferences.gameInvites !== false;
       default:
         return true;
     }
@@ -365,7 +371,7 @@ class FCMService {
    * Get Android notification channel ID
    */
   getChannelId(type, prefs = {}) {
-    if (type === 'new_message') {
+    if (type === 'new_message' || type === 'game_invite') {
       // Android fixes sound/vibration per channel, so each combination has its
       // own channel (the app creates the same four on startup, see
       // ChatApp/src/services/message-notification.ts).

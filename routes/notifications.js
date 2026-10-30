@@ -150,11 +150,12 @@ router.post('/device-heartbeat', authenticateToken, async (req, res) => {
   }
 });
 
-const PREFERENCE_KEYS = ['calls', 'messages', 'groupMessages', 'soundEnabled', 'vibrationEnabled', 'readReceipts'];
+const PREFERENCE_KEYS = ['calls', 'messages', 'groupMessages', 'gameInvites', 'soundEnabled', 'vibrationEnabled', 'readReceipts'];
 const DEFAULT_PREFERENCES = {
   calls: true,
   messages: true,
   groupMessages: true,
+  gameInvites: true,
   soundEnabled: true,
   vibrationEnabled: true,
   readReceipts: true

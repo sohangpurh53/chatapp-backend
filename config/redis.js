@@ -313,6 +313,11 @@ class RedisService {
     }
   }
 
+  /** True for the first caller until `ttlSeconds` pass (across all servers). */
+  async claimOnce(key, ttlSeconds) {
+    return (await this.client.set(key, '1', 'EX', ttlSeconds, 'NX')) === 'OK';
+  }
+
   async getUserOnlineStatus(userId) {
     try {
       const socketId = await this.client.get(`online:${userId}`);

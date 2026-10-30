@@ -62,6 +62,37 @@ class NotificationService {
   }
 
   /**
+   * Create and queue a game invite. Game data isn't end-to-end encrypted, so the
+   * server can word this itself. The caller decides who gets one.
+   */
+  async notifyGameInvite({ userId, hostName, gameName, chatId, chatName, isGroup, sessionId }) {
+    try {
+      const notification = await Notification.create({
+        userId,
+        type: 'game_invite',
+        title: isGroup ? chatName || 'Group Chat' : hostName,
+        body: isGroup ? `${hostName} started ${gameName}. Join in?` : `Wants to play ${gameName}`,
+        data: {
+          chatId,
+          sessionId,
+          senderName: hostName,
+          isGroup: isGroup ? 'true' : 'false',
+          action: 'open_chat',
+        },
+      });
+      await notificationQueue.add(
+        'send-notification',
+        { notificationId: notification.id, userId, priority: 'normal' },
+        { priority: 5 },
+      );
+      return notification;
+    } catch (error) {
+      console.error('Notify game invite error:', error);
+      return null;
+    }
+  }
+
+  /**
    * Create and queue notification for new message
    * ✅ ENHANCED: Include complete chat data in FCM notification
    */

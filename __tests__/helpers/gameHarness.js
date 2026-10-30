@@ -2,6 +2,7 @@
 // reads, so game tests run the real service and sockets without a database.
 const { randomUUID } = require('node:crypto');
 const { Chat, User, Message, ChatParticipant, UserBlock } = require('../../models');
+const redisService = require('../../config/redis');
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
@@ -75,6 +76,8 @@ function memoryStore() {
  */
 function installChatWorld({ chats, blocks = [] }) {
   const messages = new Map();
+  const online = new Set();
+  const claims = new Set();
   const originals = [];
   const stub = (object, name, replacement) => {
     originals.push([object, name, object[name]]);
@@ -92,7 +95,7 @@ function installChatWorld({ chats, blocks = [] }) {
     const ids = [].concat(where.userId || []);
     return (chat ? chat.members : [])
       .filter(id => ids.length === 0 || ids.includes(id))
-      .map(id => ({ userId: id, user: { id, username: id, avatar: null } }));
+      .map(id => ({ userId: id, isMuted: (chat.muted || []).includes(id), user: { id, username: id, avatar: null } }));
   });
   stub(Chat, 'findByPk', async (id) => {
     const chat = chatById(id);
@@ -111,6 +114,13 @@ function installChatWorld({ chats, blocks = [] }) {
       .filter(([blockerId, blockedId]) => pairs.some(p => p.blockerId === blockerId && p.blockedId === blockedId))
       .map(([blockerId, blockedId]) => ({ blockerId, blockedId }));
   });
+  // Push decisions: who is online, and the once-per-window claim
+  stub(redisService, 'getUserOnlineStatus', async (id) => online.has(id));
+  stub(redisService, 'claimOnce', async (key) => {
+    if (claims.has(key)) return false;
+    claims.add(key);
+    return true;
+  });
   stub(Message, 'findOrCreate', async ({ where, defaults }) => {
     if (messages.has(where.id)) return [row(messages.get(where.id)), false];
     messages.set(where.id, { ...defaults, createdAt: new Date() });
@@ -125,6 +135,8 @@ function installChatWorld({ chats, blocks = [] }) {
 
   return {
     messages,
+    online,
+    claims,
     restore() {
       while (originals.length) {
         const [object, name, original] = originals.pop();

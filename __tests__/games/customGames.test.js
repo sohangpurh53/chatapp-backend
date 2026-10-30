@@ -1,10 +1,19 @@
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
+
+// The real notification service opens job queues; these tests don't push
+require.cache[require.resolve('../../services/notificationService')] = {
+  id: 'notificationService', loaded: true, exports: { notifyGameInvite: async () => {} },
+};
+const redisService = require('../../config/redis');
 const { validateGame, LIMITS } = require('../../services/games/customGames');
 const gameCreator = require('../../services/ai/gameCreator');
 const { GameService } = require('../../services/games');
 const { memoryStore, installChatWorld } = require('../helpers/gameHarness');
+
+redisService.client.disconnect();
+test.after(() => redisService.client.disconnect());
 
 const CHAT = '11111111-1111-4111-8111-111111111111';
 const round = (i, extra = {}) => ({ question: `Q${i}?`, options: ['a', 'b', 'c'], answer: 1, ...extra });
@@ -155,6 +164,15 @@ describe('saved games', () => {
     for (let i = 0; i < LIMITS.maxSavedGames; i++) await games.saveCustomGame('alice', quiz());
     await assert.rejects(games.saveCustomGame('alice', quiz()), { code: 'TOO_MANY_GAMES' });
   });
+});
+
+test('the game invite setting decides whether a push goes out', () => {
+  delete require.cache[require.resolve('../../services/fcmService')];
+  const fcmService = require('../../services/fcmService');
+  assert.equal(fcmService.shouldSendNotification('game_invite', {}), true);
+  assert.equal(fcmService.shouldSendNotification('game_invite', { gameInvites: false }), false);
+  assert.equal(fcmService.shouldSendNotification('game_invite', { messages: false }), true);
+  assert.equal(fcmService.getChannelId('game_invite', {}), 'chat_messages');
 });
 
 describe('POST /ai/games', () => {

@@ -7,8 +7,9 @@
 // (GET /api/games/sessions/:id), so nothing depends on a missed event.
 const { v4: uuidv4 } = require('uuid');
 const { Chat, User, Message, ChatParticipant } = require('../../models');
+const redisService = require('../../config/redis');
 const { isUuid } = require('../../utils/ids');
-const { blockState, directPeerId } = require('../../utils/blocks');
+const { blockedPeerIds, blockState, directPeerId } = require('../../utils/blocks');
 const engine = require('./engine');
 const { getGame, isAvailable, publicCatalog } = require('./catalog');
 const { FORMATS, LIMITS, toSessionContent, validateGame } = require('./customGames');
@@ -17,6 +18,8 @@ const { dbStore } = require('./store');
 
 const CREATE_COOLDOWN_MS = 5000;
 const SWEEP_INTERVAL_MS = 15000;
+// However often a chat starts games, one person gets one push about them per window
+const INVITE_PUSH_WINDOW_SECONDS = 30 * 60;
 // Fires a moment after the deadline so the session is due when the timer runs
 const TIMER_SLACK_MS = 25;
 
@@ -125,7 +128,7 @@ class GameService {
       throw new GameError('UNKNOWN_GAME');
     }
     if (typeof gameType !== 'string' || !isAvailable(gameType)) throw new GameError('UNKNOWN_GAME');
-    const { peerId } = await this.authorize(userId, chatId);
+    const { chat, peerId } = await this.authorize(userId, chatId);
 
     const open = await this.store.findOpen(chatId);
     if (open) {
@@ -174,6 +177,9 @@ class GameService {
     const saved = await this.store.create(session);
     await this.postCard(saved, 'invite');
     this.schedule(saved);
+    // Never holds up the game: the invite card is already in the chat
+    this.pushInvites(saved, chat, invitees.map(u => u.id), !!(previous || peerId))
+      .catch(error => console.error('Game invite push failed:', error.message));
     return { session: engine.viewFor(saved, userId, this.now()) };
   }
 
@@ -378,6 +384,39 @@ class GameService {
 
   emitToChat(chatId, event, payload) {
     if (this.io) this.io.to(`chat_${chatId}`).emit(event, payload);
+  }
+
+  /**
+   * Tells people who aren't in the app. A 1:1 peer or rematch players are asked
+   * by name (`named`); a new group game reaches the whole group. Skips anyone who
+   * muted the chat, is online (they see the card), or is blocked either way.
+   * Each person's game-invite setting is checked when the push is sent.
+   */
+  async pushInvites(session, chat, inviteeIds, named) {
+    const where = { chatId: session.chatId, isActive: true };
+    if (named) where.userId = inviteeIds;
+    const members = await ChatParticipant.findAll({ where, attributes: ['userId', 'isMuted', 'mutedUntil'] });
+    const blocked = new Set(await blockedPeerIds(session.hostId));
+    const host = session.players.find(p => p.userId === session.hostId);
+    const { name: gameName } = engine.rulesOf(session);
+    const now = new Date();
+
+    for (const member of members) {
+      const { userId } = member;
+      if (userId === session.hostId || blocked.has(userId)) continue;
+      if (member.isMuted && (!member.mutedUntil || new Date(member.mutedUntil) > now)) continue;
+      if (await redisService.getUserOnlineStatus(userId)) continue;
+      if (!(await redisService.claimOnce(`game_invite:${session.chatId}:${userId}`, INVITE_PUSH_WINDOW_SECONDS))) continue;
+      await require('../notificationService').notifyGameInvite({
+        userId,
+        hostName: host?.username || 'Someone',
+        gameName,
+        chatId: session.chatId,
+        chatName: chat.name,
+        isGroup: !!chat.isGroup,
+        sessionId: session.id,
+      });
+    }
   }
 
   /** Of `userIds`, the ones still active in the chat, with their names. */

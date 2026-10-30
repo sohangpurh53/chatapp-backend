@@ -2,7 +2,7 @@
 // play, drop out and come back, against the real SocketHandlers and game service.
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { installCallStore, startServer, until, redisService } = require('../helpers/callHarness');
+const { gameInvites, installCallStore, startServer, until, redisService } = require('../helpers/callHarness');
 const { memoryStore, installChatWorld } = require('../helpers/gameHarness');
 const games = require('../../services/games');
 const engine = require('../../services/games/engine');
@@ -54,6 +54,7 @@ beforeEach(async () => {
   store = memoryStore();
   games.store = store;
   games.lastCreateAt.clear();
+  gameInvites.length = 0;
   server = await startServer();
   games.setIO(server.io);
 });
@@ -238,6 +239,66 @@ describe('a 1:1 game', () => {
     await call(erin, 'game_decline', { sessionId: session.id });
     const update = await alice.waitFor('game_card_updated', u => u.game.status === 'cancelled');
     assert.equal(update.game.endReason, 'declined');
+  });
+});
+
+describe('invite pushes', () => {
+  const pushedTo = () => gameInvites.map(p => p.userId).sort();
+
+  test('a new group game reaches offline members, not the host or people in the app', async () => {
+    const alice = await server.phone('alice');
+    await server.phone('bob');
+    world.online.add('bob');
+    await call(alice, 'game_create', { chatId: GROUP, gameType: 'quick_trivia' });
+    await until(() => gameInvites.length === 1, { label: 'push' });
+    assert.deepEqual(pushedTo(), ['cara']);
+    assert.equal(gameInvites[0].gameName, 'Quick Trivia');
+    assert.equal(gameInvites[0].isGroup, true);
+  });
+
+  test('muting the chat or a block means no push', async () => {
+    world.restore();
+    world = installChatWorld({
+      chats: [{ id: GROUP, isGroup: true, members: ['alice', 'bob', 'cara'], muted: ['bob'] }],
+      blocks: [['cara', 'alice']],
+    });
+    const { UserBlock } = require('../../models');
+    const findAll = UserBlock.findAll;
+    UserBlock.findAll = async () => [{ blockerId: 'cara', blockedId: 'alice' }];
+    const alice = await server.phone('alice');
+    await call(alice, 'game_create', { chatId: GROUP, gameType: 'quick_trivia' });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    UserBlock.findAll = findAll;
+    assert.deepEqual(pushedTo(), []);
+  });
+
+  test('starting game after game pushes once per person', async () => {
+    const alice = await server.phone('alice');
+    const first = await call(alice, 'game_create', { chatId: GROUP, gameType: 'quick_trivia' });
+    await until(() => gameInvites.length === 2, { label: 'first pushes' });
+    await call(alice, 'game_cancel', { sessionId: first.session.id });
+    games.lastCreateAt.clear();
+    await call(alice, 'game_create', { chatId: GROUP, gameType: 'quick_trivia' });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepEqual(pushedTo(), ['bob', 'cara']);
+  });
+
+  test('a rematch only asks the people who played', async () => {
+    const alice = await server.phone('alice');
+    const bob = await server.phone('bob');
+    world.online.add('bob');
+    const { session } = await call(alice, 'game_create', { chatId: GROUP, gameType: 'quick_trivia' });
+    await call(bob, 'game_join', { sessionId: session.id });
+    await call(alice, 'game_start', { sessionId: session.id });
+    await call(alice, 'game_cancel', { sessionId: session.id });
+    world.claims.clear();
+    gameInvites.length = 0;
+    world.online.clear();
+    world.online.add('alice');
+    games.lastCreateAt.clear();
+    await call(alice, 'game_create', { chatId: GROUP, gameType: 'quick_trivia', rematchOf: session.id });
+    await until(() => gameInvites.length > 0, { label: 'rematch push' });
+    assert.deepEqual(pushedTo(), ['bob']);
   });
 });
 

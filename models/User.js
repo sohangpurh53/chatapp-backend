@@ -123,6 +123,7 @@ const User = sequelize.define('User', {
       calls: true,
       messages: true,
       groupMessages: true,
+      gameInvites: true,
       soundEnabled: true,
       vibrationEnabled: true
     }
