@@ -1,5 +1,10 @@
 const AppLog = require("../models/AppLog");
 
+// A log row is an error line, not storage
+const MAX_MESSAGE_LENGTH = 5000;
+const MAX_PAYLOAD_LENGTH = 20000;
+const MAX_LABEL_LENGTH = 20;
+
 /**
  * POST /api/app-logs
  * Store console logs
@@ -13,16 +18,19 @@ exports.createLog = async (req, res) => {
       return res.status(400).json({ error: "Invalid log level" });
     }
 
-    if (!message) {
+    if (!message || typeof message !== "string") {
       return res.status(400).json({ error: "Message is required" });
     }
 
+    const label = (value) => (typeof value === "string" ? value.slice(0, MAX_LABEL_LENGTH) : undefined);
+    const payloadFits = JSON.stringify(payload ?? null).length <= MAX_PAYLOAD_LENGTH;
+
     const log = await AppLog.create({
       level,
-      message,
-      payload,
-      platform,
-      source,
+      message: message.slice(0, MAX_MESSAGE_LENGTH),
+      payload: payloadFits ? payload : null,
+      platform: label(platform),
+      source: label(source),
     });
 
     return res.status(201).json({ success: true, id: log.id });

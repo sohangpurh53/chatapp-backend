@@ -2,6 +2,11 @@ const crypto = require("crypto");
 const express = require("express");
 const router = express.Router();
 const appLogsController = require("../controllers/appLogsController");
+const { createRateLimiter } = require("../middleware/rateLimit");
+
+// Open to apps that aren't signed in yet, so it can't take a login. Behind the proxy all
+// phones can count as one address: high enough for real errors, low enough to stop a flood.
+const writeLimiter = createRateLimiter({ name: "app-logs", windowMs: 60 * 1000, max: 300 });
 
 // Reading the logs takes the key from APP_LOGS_KEY. Without one set, nobody can.
 const requireLogsKey = (req, res, next) => {
@@ -15,7 +20,7 @@ const requireLogsKey = (req, res, next) => {
 };
 
 // ✅ ONLY two routes
-router.post("/app-logs", appLogsController.createLog);
+router.post("/app-logs", writeLimiter, appLogsController.createLog);
 router.get("/app-logs", requireLogsKey, appLogsController.getLogs);
 
 module.exports = router;

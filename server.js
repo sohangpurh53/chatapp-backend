@@ -22,6 +22,7 @@ const {
 
 // Socket.IO Redis Adapter for multi-server support
 const { setupSocketAdapter } = require('./config/socketAdapter');
+const { requireAdmin } = require('./middleware/adminAuth');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -77,7 +78,7 @@ createBullBoard({
   serverAdapter: serverAdapter,
 });
 
-app.use('/admin/queues', serverAdapter.getRouter());
+app.use('/admin/queues', requireAdmin, serverAdapter.getRouter());
 
 // Routes
 app.use('/api/auth', authRoutes);
