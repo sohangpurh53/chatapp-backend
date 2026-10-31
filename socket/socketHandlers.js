@@ -4,6 +4,7 @@ const redisService = require('../config/redis');
 const { v4: uuidv4 } = require('uuid');
 const notificationService = require('../services/notificationService');
 const { isUuid } = require('../utils/ids');
+const { safeFileName } = require('../utils/fileName');
 const { blockState, directPeerId } = require('../utils/blocks');
 const { registerGameHandlers } = require('./gameHandlers');
 
@@ -278,7 +279,8 @@ class SocketHandlers {
   }
 
   handleLeaveChat(socket, data) {
-    const { chatId } = data;
+    const chatId = data?.chatId;
+    if (!isUuid(chatId)) return;
     socket.leave(`chat_${chatId}`);
 
     // Notify others that user left
@@ -322,8 +324,8 @@ class SocketHandlers {
         keyId: keyId ? keyId.substring(0, 20) + '...' : null
       });
 
-      // Game cards only ever come from the server (services/games)
-      if (messageType === 'game') {
+      // Game cards and system notes only ever come from the server
+      if (messageType === 'game' || messageType === 'system') {
         fail({ message: 'Invalid message type', code: 'INVALID_MESSAGE_TYPE', chatId });
         return;
       }
@@ -503,7 +505,7 @@ class SocketHandlers {
         encryptionMetadata,
         messageType,
         fileUrl,
-        fileName,
+        fileName: safeFileName(fileName),
         fileSize,
         senderId: socket.userId,
         receiverId,
@@ -777,7 +779,17 @@ class SocketHandlers {
     }
     this.lastWaveAt.set(key, now);
 
-    const waveBlock = await blockState(socket.userId, toUserId);
+    if (!isUuid(toUserId)) {
+      return socket.emit('wave_result', { toUserId, delivered: false, reason: 'offline' });
+    }
+
+    let waveBlock;
+    try {
+      waveBlock = await blockState(socket.userId, toUserId);
+    } catch (error) {
+      console.error('Error checking wave block state:', error);
+      return socket.emit('wave_result', { toUserId, delivered: false, reason: 'offline' });
+    }
     if (waveBlock.blockedByMe || waveBlock.blockedByThem) {
       return socket.emit('wave_result', { toUserId, delivered: false, reason: 'offline' });
     }
@@ -829,7 +841,8 @@ class SocketHandlers {
   }
 
   handleTypingStart(socket, data) {
-    const { chatId } = data;
+    const chatId = data?.chatId;
+    if (!isUuid(chatId)) return;
 
     if (!this.typingUsers.has(chatId)) {
       this.typingUsers.set(chatId, new Set());
@@ -847,7 +860,8 @@ class SocketHandlers {
   }
 
   handleTypingStop(socket, data) {
-    const { chatId } = data;
+    const chatId = data?.chatId;
+    if (!isUuid(chatId)) return;
 
     if (this.typingUsers.has(chatId)) {
       this.typingUsers.get(chatId).delete(socket.userId);

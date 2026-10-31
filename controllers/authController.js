@@ -241,6 +241,11 @@ const googleLogin = async (req, res) => {
       return res.status(400).json({ error: 'Google account has no email' });
     }
 
+    // An unverified address must never match (and link to) someone's account
+    if (payload.email_verified === false) {
+      return res.status(403).json({ error: 'Google email is not verified' });
+    }
+
     // Find by googleId first, then fall back to linking an existing
     // email/password account that signs in with Google for the first time.
     let user = await User.findOne({ where: { googleId } });
@@ -961,7 +966,7 @@ const refreshToken = async (req, res) => {
 
     let decoded;
     try {
-      decoded = jwt.verify(token, REFRESH_SECRET);
+      decoded = jwt.verify(token, REFRESH_SECRET, { algorithms: ['HS256'] });
     } catch (err) {
       return res.status(401).json({ error: 'Invalid or expired refresh token', code: 'REFRESH_TOKEN_EXPIRED' });
     }

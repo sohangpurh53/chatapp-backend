@@ -11,7 +11,7 @@ const authenticateToken = async (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
 
     // Tokens from a signed-out device stop working immediately
     if (decoded.sid && !(await sessionService.validateSession(decoded.sid, decoded.userId))) {
@@ -43,7 +43,7 @@ const authenticateSocket = async (socket, next) => {
       return next(new Error('Authentication error'));
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     if (decoded.sid && !(await sessionService.validateSession(decoded.sid, decoded.userId))) {
       return next(new Error('Session revoked'));
     }

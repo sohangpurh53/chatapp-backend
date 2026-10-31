@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/rateLimit');
+const { requireAdmin } = require('../middleware/adminAuth');
 const {
   register,
   login,
@@ -61,6 +62,6 @@ router.put('/keys', authenticateToken, updateKeys);
 
 // Encryption session management
 router.post('/encryption/validate-session', authenticateToken, validateEncryptionSession);
-router.get('/encryption/stats', authenticateToken, getEncryptionStats);
+router.get('/encryption/stats', requireAdmin, getEncryptionStats);
 
 module.exports = router;

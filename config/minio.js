@@ -1,9 +1,14 @@
 const Minio = require('minio');
 
+// Env flags are hand-written: "True", "TRUE", "1" and "yes" all mean on
+const isEnabled = (value) => /^(true|1|yes|on)$/i.test(String(value ?? '').trim());
+
+const USE_SSL = isEnabled(process.env.MINIO_USE_SSL);
+
 const minioClient = new Minio.Client({
   endPoint: process.env.MINIO_ENDPOINT || 'localhost',
   port: parseInt(process.env.MINIO_PORT) || 9000,
-  useSSL: process.env.MINIO_USE_SSL === 'true',
+  useSSL: USE_SSL,
   accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
   secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
 });
@@ -15,13 +20,15 @@ const BUCKET_NAME = process.env.MINIO_BUCKET || 'chatapp-media';
 function publicObjectUrl(bucket, objectName) {
   const base = process.env.MINIO_PUBLIC_URL
     ? process.env.MINIO_PUBLIC_URL.replace(/\/+$/, '')
-    : `${process.env.MINIO_USE_SSL === 'true' ? 'https' : 'http'}://${process.env.MINIO_ENDPOINT || 'localhost'}:${parseInt(process.env.MINIO_PORT) || 9000}`;
+    : `${USE_SSL ? 'https' : 'http'}://${process.env.MINIO_ENDPOINT || 'localhost'}:${parseInt(process.env.MINIO_PORT) || 9000}`;
   const path = objectName.split('/').map(encodeURIComponent).join('/');
   return `${base}/${bucket}/${path}`;
 }
 
 // Initialize bucket
 async function initializeBucket() {
+  // A TLS/port mismatch shows up as every upload failing, so say what we dial
+  console.log(`🪣 MinIO: ${USE_SSL ? 'https' : 'http'}://${process.env.MINIO_ENDPOINT || 'localhost'}:${parseInt(process.env.MINIO_PORT) || 9000}`);
   try {
     const exists = await minioClient.bucketExists(BUCKET_NAME);
     if (!exists) {
@@ -67,6 +74,7 @@ module.exports = {
   minioClient,
   BUCKET_NAME,
   publicObjectUrl,
+  isEnabled,
   initializeBucket,
   testConnection
 };

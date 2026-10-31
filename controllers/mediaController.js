@@ -128,21 +128,15 @@ const deleteFile = async (req, res) => {
           fileObjectName = urlParts.slice(bucketIndex + 1).join('/');
         }
       }
-    } else {
-      // Verify user owns the file by checking messages
-      const message = await Message.findOne({
-        where: {
-          senderId: userId,
-          fileUrl: { [Op.like]: `%${objectName}%` },
-        },
-      });
+    }
 
-      if (!message) {
-        return res.status(403).json({ 
-          error: 'Access denied',
-          message: 'You do not have permission to delete this file'
-        });
-      }
+    // Message rows can't prove ownership (senders choose their fileUrl); the
+    // object key can: every upload is stored under users/<uploaderId>/
+    if (fileObjectName && (!fileObjectName.startsWith(`users/${userId}/`) || fileObjectName.includes('..'))) {
+      return res.status(403).json({ 
+        error: 'Access denied',
+        message: 'You do not have permission to delete this file'
+      });
     }
 
     if (!fileObjectName) {

@@ -125,6 +125,11 @@ io.on('connection', (socket) => {
   socketHandlers.handleConnection(socket);
 });
 
+// One failed async handler must not take every connected user down with it
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});
+
 // Database connection and server start
 const PORT = process.env.PORT || 3000;
 

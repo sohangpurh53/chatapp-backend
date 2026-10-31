@@ -34,8 +34,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@bull-board/api": "^5.23.0",
-    "@bull-board/express": "^5.23.0",
+    "@bull-board/api": "^9.10.5",
+    "@bull-board/express": "^9.10.5",
     "@socket.io/redis-adapter": "^8.3.0",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.65.0",
@@ -49,20 +49,32 @@
     "mime-types": "^2.1.35",
     "minio": "^8.0.2",
     "multer": "^2.0.2",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^10.3.1",
     "pg": "^8.16.3",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.37.7",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.5",
     "socket.io": "^4.8.1",
     "uuid": "^11.0.3"
   },
   "devDependencies": {
-    "axios": "^1.13.2",
-    "nodemon": "^3.1.10",
+    "axios": "^1.21.0",
+    "nodemon": "^3.1.14",
     "socket.io-client": "^4.8.1"
   },
   "overrides": {
-    "uuid": "$uuid"
+    "uuid": "$uuid",
+    "minio": {
+      "query-string": {
+        "decode-uri-component": "^0.5.1"
+      },
+      "stream-json": "^3.8.0"
+    },
+    "nodemon": {
+      "minimatch": "^11.0.1"
+    }
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

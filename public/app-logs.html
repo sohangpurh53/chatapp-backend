@@ -419,7 +419,7 @@
                             <div class="flex items-start justify-between gap-4 mb-2">
                                 <div class="flex items-center gap-2 flex-wrap">
                                     <span class="px-2 py-0.5 rounded text-[10px] font-bold ${config.badge} code-font">${config.name}</span>
-                                    ${log.platform ? `<span class="px-2 py-0.5 rounded text-[10px] bg-slate-700/50 text-slate-300 code-font">${log.platform}</span>` : ''}
+                                    ${log.platform ? `<span class="px-2 py-0.5 rounded text-[10px] bg-slate-700/50 text-slate-300 code-font">${escapeHtml(log.platform)}</span>` : ''}
                                     <span class="text-[10px] text-slate-500 code-font">${date.toLocaleString()}</span>
                                 </div>
                                 <div class="flex items-center gap-2">

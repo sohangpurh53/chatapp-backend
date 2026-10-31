@@ -590,14 +590,16 @@ const searchUsers = async (req, res) => {
     // People you blocked are hidden from your search. People who blocked you stay
     // visible so you can't tell.
     const excludedIds = [currentUserId, ...(await blockedByUser(currentUserId))];
+    // A bare "%" must search for a percent sign, not match every account
+    const likeQuery = String(query).replace(/[\\%_]/g, '\\$&');
     const users = await User.findAll({
       where: {
         [Op.and]: [
           { id: { [Op.notIn]: excludedIds } },
           {
             [Op.or]: [
-              { username: { [Op.iLike]: `%${query}%` } },
-              { email: { [Op.iLike]: `%${query}%` } }
+              { username: { [Op.iLike]: `%${likeQuery}%` } },
+              { email: { [Op.iLike]: `%${likeQuery}%` } }
             ]
           }
         ]
@@ -1738,8 +1740,9 @@ const getFullChatData = async (req, res) => {
     }
 
     // Check if user has access to this chat
-    const hasAccess = chat.isGroup 
-      ? chat.participants?.some(p => p.id === userId)
+    // Former group members keep a participant row, so only active ones count
+    const hasAccess = chat.isGroup
+      ? !!(await ChatParticipant.findOne({ where: { chatId, userId, isActive: true } }))
       : (chat.participant1Id === userId || chat.participant2Id === userId);
 
     if (!hasAccess) {
