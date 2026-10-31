@@ -26,9 +26,6 @@ const register = async (req, res) => {
     const lastName = typeof req.body.lastName === 'string' ? req.body.lastName.trim() : '';
 
     console.log('📥 Registration request received:', {
-      firstName,
-      lastName,
-      email,
       hasPassword: !!password,
       hasPublicKey: !!publicKey,
       hasEncryptedPrivateKey: !!encryptedPrivateKey,

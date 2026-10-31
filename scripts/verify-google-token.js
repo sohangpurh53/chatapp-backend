@@ -1,7 +1,6 @@
 /**
  * Checks a Google idToken the way POST /api/auth/google does, without logging in.
  *
- *   node scripts/verify-google-token.js            # takes the latest idToken from `adb logcat`
  *   node scripts/verify-google-token.js <idToken>
  *   node scripts/verify-google-token.js --server   # also POST it to the deployed /api/auth/google
  *
@@ -9,25 +8,18 @@
  * Tokens expire after 1 hour.
  */
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
-const { execSync } = require('child_process');
 const { OAuth2Client } = require('google-auth-library');
 
 const SERVER = process.env.VERIFY_SERVER_URL || 'https://socket-chatapp.wesolves.online/api';
 const args = process.argv.slice(2);
 const hitServer = args.includes('--server');
 
-const readTokenFromLogcat = () => {
-  const log = execSync('adb logcat -d', { maxBuffer: 64 * 1024 * 1024 }).toString();
-  const matches = [...log.matchAll(/"idToken":"([^"]+)"/g)];
-  return matches.length ? matches[matches.length - 1][1] : null;
-};
-
 const decode = (token) => JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
 
 const main = async () => {
-  const idToken = args.find((a) => !a.startsWith('--')) || readTokenFromLogcat();
+  const idToken = args.find((a) => !a.startsWith('--'));
   if (!idToken) {
-    console.error('No idToken given and none found in adb logcat. Sign in with Google on the phone first.');
+    console.error('Usage: node scripts/verify-google-token.js <idToken> [--server]');
     process.exit(1);
   }
 
