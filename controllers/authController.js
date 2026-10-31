@@ -346,12 +346,10 @@ const getVibes = async (req, res) => {
 
 const logout = async (req, res) => {
   try {
-    await req.user.update({
-      isOnline: false,
-      lastSeen: new Date()
-    });
+    await req.user.update({ lastSeen: new Date() });
 
-    // Sign out this device only; the user's other devices stay signed in
+    // Sign out this device only; the user's other devices stay signed in. Online status
+    // follows their sockets: another device may still be connected
     if (req.sessionId) {
       await sessionService.revokeById(req.user.id, req.sessionId, 'logout');
     }

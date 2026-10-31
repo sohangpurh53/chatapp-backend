@@ -15,6 +15,12 @@ const RING_TIMEOUT_MS = 45000;
 const RING_ACK_TIMEOUT_MS = 2500;
 // How long a call outlives its user's last socket closing
 const CALL_RECONNECT_GRACE_MS = { answered: 60000, ringing: 15000 };
+// How long a user keeps showing online after their last socket drops. A phone changing
+// networks reconnects within seconds: without this every contact sees it flicker.
+const PRESENCE_GRACE_MS = 8000;
+// Socket closed on purpose (logout, signed out from another device): nothing is coming
+// back, so the user goes offline right away
+const DELIBERATE_DISCONNECTS = new Set(['client namespace disconnect', 'server namespace disconnect']);
 
 class SocketHandlers {
   constructor(io) {
@@ -26,11 +32,14 @@ class SocketHandlers {
     this.callTimeouts = new Map(); // callId -> timeoutId
     this.callLocks = new Map(); // callId -> promise of the last queued task (see runExclusive)
     this.callDisconnectTimers = new Map(); // userId -> timeoutId (see scheduleCallDisconnectCleanup)
+    this.shownOnline = new Set(); // userIds everyone currently sees as online
+    this.offlineTimers = new Map(); // userId -> timeoutId (see markUserOffline)
     // Overridable so tests can run the real timers in milliseconds
     this.timings = {
       ringTimeoutMs: RING_TIMEOUT_MS,
       ringAckTimeoutMs: RING_ACK_TIMEOUT_MS,
       reconnectGraceMs: { ...CALL_RECONNECT_GRACE_MS },
+      presenceGraceMs: PRESENCE_GRACE_MS,
     };
     this.shadowCalls = new Map(); // callId -> ring timer of a call to someone who blocked the caller
     this.lastWaveAt = new Map(); // `${from}:${to}` -> timestamp (rate limit)
@@ -45,7 +54,7 @@ class SocketHandlers {
     this.cancelCallDisconnectTimer(socket.userId);
 
     // Update user online status
-    this.updateUserOnlineStatus(socket.userId, true);
+    this.markUserOnline(socket.userId, socket.id);
 
     // The Redis online key has a 5-minute TTL (so a crashed server can't leave
     // users "online" forever). Refresh it from the engine heartbeat, otherwise
@@ -80,7 +89,7 @@ class SocketHandlers {
     }
 
     // Send current online users list to the newly connected user
-    const onlineUserIds = Array.from(this.connectedUsers.keys());
+    const onlineUserIds = Array.from(this.shownOnline);
     socket.emit('online-users-list', {
       users: onlineUserIds
     });
@@ -121,7 +130,7 @@ class SocketHandlers {
     socket.on('share_screen', (data) => this.handleShareScreen(socket, data));
     socket.on('stop_screen_share', (data) => this.handleStopScreenShare(socket, data));
 
-    socket.on('disconnect', () => this.handleDisconnect(socket));
+    socket.on('disconnect', (reason) => this.handleDisconnect(socket, reason));
 
     // Signals sent while this user's socket was down mid-call (an ICE restart after a
     // network change). Signals for a call that is still ringing wait for answer_call:
@@ -1165,7 +1174,7 @@ class SocketHandlers {
     }
   }
 
-  async handleDisconnect(socket) {
+  async handleDisconnect(socket, reason) {
     console.log(`User ${socket.user.username} disconnected`);
 
     // A reconnect can create the new socket before the old one's disconnect
@@ -1178,7 +1187,7 @@ class SocketHandlers {
     } else {
       this.connectedUsers.delete(socket.userId);
       this.scheduleCallDisconnectCleanup(socket.userId);
-      await this.updateUserOnlineStatus(socket.userId, false);
+      this.markUserOffline(socket.userId, DELIBERATE_DISCONNECTS.has(reason));
     }
 
     // Clean up typing status
@@ -1229,8 +1238,7 @@ class SocketHandlers {
 
   handleGetOnlineUsers(socket) {
     try {
-      // Get all online user IDs from connectedUsers map
-      const onlineUserIds = Array.from(this.connectedUsers.keys());
+      const onlineUserIds = Array.from(this.shownOnline);
       
       console.log(`[GET ONLINE USERS] Sending ${onlineUserIds.length} online users to ${socket.userId}`);
       
@@ -1242,6 +1250,45 @@ class SocketHandlers {
     }
   }
 
+  /** A socket connected. Contacts only hear about it if they saw this user offline. */
+  markUserOnline(userId, socketId) {
+    clearTimeout(this.offlineTimers.get(userId));
+    this.offlineTimers.delete(userId);
+    redisService.setUserOnline(userId, socketId);
+    if (!this.shownOnline.has(userId)) {
+      this.shownOnline.add(userId);
+      this.publishPresence(userId, true);
+    }
+  }
+
+  /**
+   * The user's last socket closed. Redis changes now, so messages sent from here on
+   * still reach them with a push; what contacts see waits out the grace period.
+   */
+  markUserOffline(userId, immediately) {
+    redisService.setUserOffline(userId);
+    clearTimeout(this.offlineTimers.get(userId));
+    this.offlineTimers.delete(userId);
+
+    const goOffline = () => {
+      this.offlineTimers.delete(userId);
+      if (this.shownOnline.delete(userId)) this.publishPresence(userId, false);
+    };
+    if (immediately) {
+      goOffline();
+    } else {
+      const timer = setTimeout(goOffline, this.timings.presenceGraceMs);
+      timer.unref?.();
+      this.offlineTimers.set(userId, timer);
+    }
+  }
+
+  // One at a time per user, so a quick offline/online pair can't reach the database or
+  // contacts in the wrong order
+  publishPresence(userId, isOnline) {
+    return this.runExclusive(`presence_${userId}`, () => this.updateUserOnlineStatus(userId, isOnline));
+  }
+
   async updateUserOnlineStatus(userId, isOnline) {
     try {
       await User.update(
@@ -1251,13 +1298,6 @@ class SocketHandlers {
         },
         { where: { id: userId } }
       );
-
-      // Update Redis cache
-      if (isOnline) {
-        await redisService.setUserOnline(userId, this.connectedUsers.get(userId));
-      } else {
-        await redisService.setUserOffline(userId);
-      }
 
       // Notify all connected users about status change
       this.io.emit('user_status_changed', {

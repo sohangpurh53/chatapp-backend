@@ -40,7 +40,10 @@ const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  }
+  },
+  // A phone that lost its connection is noticed within 25 s (default: 45 s)
+  pingInterval: 15000,
+  pingTimeout: 10000
 });
 
 // Setup Redis adapter for multi-server Socket.IO support
