@@ -38,6 +38,15 @@ describe('minio with overridden query-string / stream-json', () => {
     assert.match(parsed.searchParams.get('X-Amz-Signature'), /^[0-9a-f]{64}$/);
   });
 
+  // minio requires 'stream-json/jsonl/Parser.js' at load time. stream-json 3.x
+  // renamed it to parser.js, which only "works" on case-insensitive disks
+  // (Windows, /mnt/*) and crashes the server on Linux/Docker.
+  it('can load the stream-json parser minio requires', () => {
+    const minioDir = path.dirname(require.resolve('minio'));
+    const { make } = require(require.resolve('stream-json/jsonl/Parser.js', { paths: [minioDir] }));
+    assert.equal(typeof make, 'function');
+  });
+
   it('keeps the query encoding S3 signatures depend on', () => {
     const qs = require(require.resolve('query-string', {
       paths: [path.dirname(require.resolve('minio'))],

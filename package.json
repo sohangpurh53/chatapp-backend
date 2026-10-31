@@ -67,8 +67,7 @@
     "minio": {
       "query-string": {
         "decode-uri-component": "^0.5.1"
-      },
-      "stream-json": "^3.8.0"
+      }
     },
     "nodemon": {
       "minimatch": "^11.0.1"
