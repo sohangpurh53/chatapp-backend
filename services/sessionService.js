@@ -7,6 +7,8 @@ const { UserSession, UserDevice } = require('../models');
 const MAX_ACTIVE_SESSIONS = Math.max(1, parseInt(process.env.MAX_ACTIVE_SESSIONS || '5', 10));
 const VALIDATION_CACHE_MS = 30 * 1000;
 const TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+// Signed out by something other than this device itself: it has to be told
+const REMOTE_REASONS = new Set(['remote', 'all_others', 'limit']);
 
 let io = null;
 // sid -> { ok, userId, until, lastTouch }
@@ -43,6 +45,19 @@ const notifyRevoked = (session, reason) => {
   setTimeout(() => io.in(room).disconnectSockets(true), 500);
 };
 
+/** The socket can't reach an app in the background: push before the token is removed. */
+const pushSessionCheck = async (session) => {
+  if (!session.deviceId) return;
+  const device = await UserDevice.findOne({
+    where: { userId: session.userId, deviceId: session.deviceId },
+    attributes: ['fcmToken']
+  });
+  if (!device?.fcmToken) return;
+  require('./fcmService').sendSessionCheck(device.fcmToken).catch((error) => {
+    console.error('Session check push failed:', error.message);
+  });
+};
+
 /** Stop pushes to a signed-out device. */
 const deactivateDevice = async (userId, deviceId) => {
   if (!deviceId) return;
@@ -55,6 +70,13 @@ const deactivateDevice = async (userId, deviceId) => {
 const revokeSession = async (session, reason) => {
   if (!session || session.revokedAt) return false;
   await session.update({ revokedAt: new Date(), revokeReason: reason });
+  // Before the push: the device asks right after it, and must not get a cached "fine"
+  cache.delete(session.id);
+  if (REMOTE_REASONS.has(reason)) {
+    await pushSessionCheck(session).catch((error) => {
+      console.error('Session check push failed:', error.message);
+    });
+  }
   await deactivateDevice(session.userId, session.deviceId);
   notifyRevoked(session, reason);
   return true;

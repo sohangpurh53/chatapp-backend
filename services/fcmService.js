@@ -331,6 +331,22 @@ class FCMService {
   }
 
   /**
+   * Wake a signed-out device so it finds out now, even with the app in the background
+   * where its socket is suspended. Data only and carries no verdict: the app asks the
+   * server, so a push delivered late can't sign out a newer login on that phone.
+   */
+  async sendSessionCheck(fcmToken) {
+    const messaging = getMessaging();
+    if (!messaging) return;
+    await messaging.send({
+      token: fcmToken,
+      data: { type: 'session_check' },
+      android: { priority: 'high' },
+      apns: { headers: { 'apns-priority': '10' }, payload: { aps: { contentAvailable: true } } }
+    });
+  }
+
+  /**
    * Send notification to multiple users
    */
   async sendMulticast(userIds, notification) {
